@@ -14,6 +14,20 @@ After building, add only accounts you are authorized to use. On the Proxy API pa
 
 Automatic in-app updates are disabled. Until this public project publishes its own release, updates require rebuilding from source. The account data directory remains separate from the app bundle.
 
+## Desktop workflow additions
+
+The sidebar includes an **账号与签到** (account operations) console and
+**效率工具** (workflow tools). The operations console brings account-pool
+status and check-in results into one place. Workflow tools provide a local
+searchable prompt library and user-initiated per-account exports using the
+existing account export API. Account export files contain login credentials;
+store them privately. Prompt text is never executed automatically.
+
+These independently implemented features take functional inspiration from
+[workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) and
+[WorkDaddy](https://github.com/babygoton/WorkDaddy). They do not integrate those
+projects' cloud task engines or unattended client-control mechanisms.
+
 ## Build from source
 
 Requirements: macOS 15.0 or newer with Xcode Command Line Tools, Node.js 24.18.1, Rust 1.99.1, and Go 1.26.10. Choose the matching architecture in the build guide: [Apple silicon](docs/APPLE_SILICON_BUILD.md) or [Intel Mac](docs/INTEL_MAC_BUILD.md).

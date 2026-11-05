@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { Link2, MessagesSquare, Play, Plug, Settings, Sparkles, User } from "lucide-react";
+import { Activity, Library, Link2, MessagesSquare, Play, Plug, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -12,6 +12,8 @@ import SessionsPage from "@/pages/SessionsPage";
 import CreditStatsPage from "@/pages/CreditStatsPage";
 import TokenStatsPage from "@/pages/TokenStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
+import OperationsPage from "@/pages/OperationsPage";
+import WorkbenchPage from "@/pages/WorkbenchPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { CompanionDemoDialog } from "@/components/companion-demo-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -217,6 +219,8 @@ function Layout() {
             <User className="size-4" />
             账号管理
           </NavLink>
+          <NavLink to="/operations" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><Activity className="size-4" />账号与签到</NavLink>
+          <NavLink to="/workbench" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><Library className="size-4" />效率工具</NavLink>
           {sessionsNavEnabled && (
             <NavLink
               to="/sessions"
@@ -288,6 +292,8 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<AccountsPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
+            <Route path="/operations" element={<OperationsPage />} />
+            <Route path="/workbench" element={<WorkbenchPage />} />
             <Route path="/credit-stats" element={<CreditStatsPage />} />
             <Route path="/token-stats" element={<TokenStatsPage />} />
             <Route path="/proxy" element={<ProxyPage />} />
