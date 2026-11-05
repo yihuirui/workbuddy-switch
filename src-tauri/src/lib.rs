@@ -8,6 +8,7 @@ mod companion;
 #[cfg(target_os = "macos")]
 mod instance_lock;
 mod proxy_commands;
+mod usage_widget;
 #[cfg(desktop)]
 mod tray;
 mod update_service;
@@ -220,6 +221,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            usage_widget::toggle_usage_widget,
+            usage_widget::close_usage_widget,
+            usage_widget::return_to_main,
+            usage_widget::get_usage_widget_system_metrics,
+            usage_widget::reset_usage_widget_system_metrics,
             proxy_commands::proxy_set_enabled,
             proxy_commands::proxy_status,
             proxy_commands::proxy_save_settings,

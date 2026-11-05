@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { toast } from "sonner";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { Activity, Library, Link2, MessagesSquare, Play, Plug, Settings, Sparkles, User } from "lucide-react";
+import { Activity, Gauge, Library, Link2, MessagesSquare, Play, Plug, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -29,7 +29,10 @@ import { changeCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useRotateDeferredNotice } from "@/lib/use-rotate-deferred-notice";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
+import { toggleUsageWidget } from "@/lib/usage-widget";
 import { useAccountsStore } from "@/stores/accounts";
+
+const UsageWidgetPage = lazy(() => import("@/pages/UsageWidgetPage"));
 
 /**
  * 悬浮窗面板：从 footer 向上滑出，开关与设置同屏。
@@ -164,6 +167,24 @@ export function UpdateCenter({ running }: { running: boolean | undefined }) {
           )}
           <ProductFooterIdentity />
         </div>
+        {api.isDesktop() && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && !demoModeEnabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-2 h-8 w-full justify-start gap-2 px-2 text-xs text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            onClick={async () => {
+              try {
+                const open = await toggleUsageWidget();
+                toast.success(open ? "用量悬浮窗已打开" : "用量悬浮窗已关闭");
+              } catch (cause) {
+                toast.error("切换用量悬浮窗失败", { description: api.asError(cause) });
+              }
+            }}
+          >
+            <Gauge className="size-4" />用量悬浮窗
+          </Button>
+        )}
       </section>
   );
 }
@@ -283,6 +304,11 @@ function Layout() {
 }
 
 export default function App() {
+  const isUsageWidgetWindow = typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("usage_widget") === "1";
+  if (isUsageWidgetWindow && api.isDesktop() && !demoModeEnabled) {
+    return <Suspense fallback={<main className="grid h-screen place-items-center bg-background text-sm text-muted-foreground">正在加载用量…</main>}><UsageWidgetPage /></Suspense>;
+  }
   const Router = pagesDemoHostingEnabled ? HashRouter : BrowserRouter;
 
   return (

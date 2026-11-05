@@ -23,6 +23,12 @@ searchable prompt library and user-initiated per-account exports using the
 existing account export API. Account export files contain login credentials;
 store them privately. Prompt text is never executed automatically.
 
+The sidebar's **用量悬浮窗** button opens an on-demand, always-on-top usage
+window. Its Token rate is an observed local-log delta per minute; AI generation
+tokens/s remains uncollected without reliable request durations. CPU and memory
+use read-only macOS system statistics. See [Usage widget metrics](docs/USAGE_WIDGET.md)
+for the sampling windows and exact memory calculation.
+
 These independently implemented features take functional inspiration from
 [workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) and
 [WorkDaddy](https://github.com/babygoton/WorkDaddy). They do not integrate those
