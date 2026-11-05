@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  ArrowUpCircle,
   ChevronDown,
   CircleCheck,
   ExternalLink,
   Loader2,
   RefreshCw,
-  Save,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,6 +30,7 @@ import { Switch } from "@/components/ui/switch";
 import { TimePicker } from "@/components/ui/time-picker";
 import { displayName } from "@/lib/account-display";
 import * as api from "@/lib/api";
+import { checkinBatchFeedback } from "@/lib/checkin-feedback";
 import { canPersistErrorLog } from "@/lib/error-report";
 import { setSessionsNavEnabled, useSessionsNavEnabled } from "@/lib/nav-prefs";
 import { setDefaultArchiveSyncEnabled, useDefaultArchiveSyncEnabled } from "@/lib/sync-prefs";
@@ -43,22 +42,19 @@ import type {
   AutoRotateConfig,
   CheckinConfig,
   CheckinLog,
-  GithubConfig,
   RateLimitConfig,
   RateLimitHookStatus,
   RotateLog,
   RotateStatus,
   TravelConfig,
-  UpdateInfo,
 } from "@/lib/types";
-import { GITHUB_RELEASE_URL, GITHUB_REPOSITORY_URL, openReleaseUrl } from "@/lib/update";
-import { useUpdateState } from "@/lib/use-update-state";
+import { GITHUB_RELEASE_URL, openReleaseUrl } from "@/lib/update";
 import { changeCompanionEnabled, reloadCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { cn } from "@/lib/utils";
 import { accountVariant, variantSupportsCheckin, variantSupportsTravel, variantUsesIntlCodebuddyIde } from "@/lib/variant";
-import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { DemoAction } from "@/components/demo-action";
 import { CodeBuddyAiIdeMark, CodeBuddyCnIdeMark, CodeBuddyMark, JetbrainsMark, VscodeExtMark, WorkBuddyAiMark, WorkBuddyMark } from "@/components/product-marks";
+import { PRODUCT_VERSION } from "@/lib/product-version";
 import { useAccountsStore } from "@/stores/accounts";
 
 interface SettingsGroupProps {
@@ -131,7 +127,7 @@ function SettingsFieldRow({
           <div className="text-[13px] font-medium leading-4">{label}</div>
         )}
         {description && (
-          <p className="mt-0.5 text-xs leading-4 text-muted-foreground/75">{description}</p>
+          <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{description}</p>
         )}
       </div>
       <div className="flex min-w-0 w-full shrink-0 justify-end sm:w-auto">
@@ -183,7 +179,7 @@ function AccordionSettingsRow({
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium leading-4">{label}</div>
             {description && (
-              <p className="mt-0.5 text-xs leading-4 text-muted-foreground/75">{description}</p>
+              <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{description}</p>
             )}
           </div>
           {actions && (
@@ -545,27 +541,8 @@ function AutoCheckinCard() {
     setBusy(true);
     try {
       const res = await api.checkinAll();
-      if (res.status === "skipped" && res.reason === "already_running") {
-        toast.error("签到任务正在进行，请稍后再试");
-        return;
-      }
-      const ok = res.accounts.filter((a) => a.result === "success").length;
-      const already = res.accounts.filter((a) => a.result === "already").length;
-      const err = res.accounts.filter((a) => a.result === "error").length;
-      const skipped = res.accounts.filter(
-        (a) => a.result === "skipped" && a.reason === "auto_checkin_disabled",
-      ).length;
-      const detail = res.accounts
-        .filter((a) => a.result === "error")
-        .map((a) => `${a.email}（${a.error}）`)
-        .join("；");
-      const text = `签到完成：成功 ${ok}，已签 ${already}，失败 ${err}，已忽略 ${skipped} 个关闭自动签到的账号${detail ? `。${detail}` : ""}`;
-      const allFailed = res.accounts.length > 0 && err === res.accounts.length;
-      const allSkippedOrUnavailable =
-        res.accounts.length === 0 || (ok === 0 && already === 0 && err === 0);
-      if (allFailed) toast.error(text);
-      else if (allSkippedOrUnavailable) toast.info(text);
-      else toast.success(text);
+      const feedback = checkinBatchFeedback(res.accounts, res.status, res.reason);
+      toast[feedback.level](feedback.message);
       void loadConfig();
       if (logsOpen) void loadLogs();
     } catch (e) {
@@ -634,7 +611,7 @@ function AutoCheckinCard() {
                     </DemoAction>
                     <DemoAction>
                       <Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy || saving}>
-                        {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}全部立即签到
+                        {busy ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <CircleCheck />}全部立即签到
                       </Button>
                     </DemoAction>
                   </>
@@ -1085,7 +1062,7 @@ function AutoRotateCard() {
                   </DemoAction>
                   <DemoAction>
                     <Button size="sm" variant="outline" onClick={runNow} disabled={busy}>
-                      {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}立即检查一次
+                      {busy ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <RefreshCw />}立即检查一次
                     </Button>
                   </DemoAction>
                 </>
@@ -1271,9 +1248,9 @@ function PermissionCheckCard() {
             <p className="mb-1 font-medium text-foreground">如何授权（拖拽方式）：</p>
             <ol className="list-decimal space-y-1 pl-4">
               <li>点上方「打开完全磁盘访问」</li>
-              <li>再点「在 Finder 中显示」打开 workbuddy-switch 所在位置</li>
+              <li>再点「在 Finder 中显示」打开 Workbuddy-Switch2 所在位置</li>
               <li>
-                把 <b>workbuddy-switch.app</b> 从 Finder <b>直接拖进</b>完全磁盘访问的列表区域
+                把 <b>Workbuddy-Switch2.app</b> 从 Finder <b>直接拖进</b>完全磁盘访问的列表区域
                 （即使没有提示框，拖入即生效），然后打开它的开关
               </li>
               <li>回到本页点「检测权限」，或直接重试切换</li>
@@ -1289,186 +1266,32 @@ function useAuthFile(): string | undefined {
   return useAccountsStore((s) => s.status?.authFile);
 }
 
-/** 自动更新：检查公开 GitHub Releases 源 + 安装签名更新。 */
+/** 公共源码初版没有预编译包；应用内自动更新保持关闭。 */
 function UpdateCard() {
-  const version = useAccountsStore((s) => s.status?.version);
-  // 阶段与进度来自 Rust 更新服务（托盘同源）：下载完成时按钮换成「重启以完成升级」。
-  const snapshot = useUpdateState();
-  const [info, setInfo] = useState<UpdateInfo | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [installOpen, setInstallOpen] = useState(false);
-  const [restarting, setRestarting] = useState(false);
-  const [githubConfig, setGithubConfig] = useState<GithubConfig>({});
-  const [proxyUrl, setProxyUrl] = useState("");
-  const [proxySaving, setProxySaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .getGithubConfig()
-      .then((config) => {
-        if (cancelled) return;
-        setGithubConfig(config);
-        setProxyUrl(config.proxy ?? "");
-      })
-      .catch((e) => {
-        if (!cancelled) toast.error("更新配置加载失败", { description: api.asError(e) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function check() {
-    setChecking(true);
-    try {
-      const r = await api.checkUpdate(proxyUrl, true);
-      setInfo(r);
-      if (!r.ok) {
-        toast.error("检查更新失败", { description: r.message || r.error });
-      }
-    } catch (e) {
-      toast.error("检查更新失败", { description: api.asError(e) });
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  /** 安装已下载的更新包并重启（下载完成后的主动作，与托盘菜单同一入口）。 */
-  async function restartNow() {
-    setRestarting(true);
-    try {
-      await api.updateRestart();
-    } catch (e) {
-      setRestarting(false);
-      toast.error("重启失败", { description: api.asError(e) });
-    }
-  }
-
-  async function saveProxy() {
-    const value = proxyUrl.trim();
-    if (value) {
-      try {
-        const parsed = new URL(value);
-        if (!parsed.hostname || !["http:", "https:"].includes(parsed.protocol)) {
-          throw new Error("unsupported proxy protocol");
-        }
-      } catch {
-        toast.error("代理地址格式不正确，请填写 HTTP/HTTPS 地址，例如 http://127.0.0.1:7897");
-        return;
-      }
-    }
-
-    setProxySaving(true);
-    try {
-      const saved = await api.saveGithubConfig({ ...githubConfig, proxy: value });
-      setGithubConfig(saved);
-      setProxyUrl(saved.proxy ?? "");
-      toast.success(value ? "更新代理已保存" : "已关闭更新代理");
-    } catch (e) {
-      toast.error("保存代理失败", { description: api.asError(e) });
-    } finally {
-      setProxySaving(false);
-    }
-  }
-
   return (
-    <SettingsGroup
-      id="settings-updates"
-      title="自动更新"
-    >
+    <SettingsGroup id="settings-updates" title="更新">
       <CardContent className="space-y-0 p-0">
         <div className="border-b border-border/60 px-4 py-3 text-sm sm:px-5">
-          当前版本：<span className="font-mono">v{version || "?"}</span>
+          当前版本：<span className="font-mono">v{PRODUCT_VERSION}</span>
         </div>
-
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 bg-muted/25 px-4 py-3 text-sm sm:px-5">
+        <div className="flex min-w-0 items-center justify-between gap-3 bg-muted/25 px-4 py-3 text-sm sm:px-5">
           <div className="min-w-0 flex-1">
-            <div className="font-medium">公开更新源</div>
-            <div className="truncate text-xs text-muted-foreground">{GITHUB_REPOSITORY_URL}</div>
+            <div className="font-medium">手动更新</div>
+            <div className="text-xs text-muted-foreground">
+              当前公开源码版未启用应用内自动更新，也尚未发布可下载的应用安装包。请按仓库 README 的构建说明从源码构建；后续公开版本可在 Releases 页面获取。本地账号目录会保留。
+            </div>
           </div>
-          <DemoAction><Button
-            variant="ghost"
-            size="icon"
-            title="打开 GitHub Release"
-            onClick={() => void openReleaseUrl(GITHUB_RELEASE_URL)}
-          >
-            <ExternalLink />
-          </Button></DemoAction>
+          <DemoAction>
+            <Button
+              variant="ghost"
+              size="icon"
+              title="打开 Workbuddy-Switch Releases 页面（暂未发布二进制）"
+              onClick={() => void openReleaseUrl(GITHUB_RELEASE_URL)}
+            >
+              <ExternalLink />
+            </Button>
+          </DemoAction>
         </div>
-
-        <SettingsFieldRow
-          label="更新代理地址"
-          description="仅用于 GitHub 更新检查和安装包下载；留空表示关闭显式代理。"
-          htmlFor="update-proxy"
-          className="bg-muted/25"
-          operational
-        >
-          <Input
-            id="update-proxy"
-            className="w-full sm:w-80"
-            value={proxyUrl}
-            onChange={(event) => setProxyUrl(event.target.value)}
-            placeholder="例如 http://127.0.0.1:7897"
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </SettingsFieldRow>
-
-        <div className="flex flex-wrap gap-2 border-b border-border/60 bg-muted/25 px-4 py-3 sm:px-5">
-          <DemoAction><Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
-            {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
-            保存代理
-          </Button></DemoAction>
-        </div>
-
-        <div className="flex flex-wrap gap-2 border-b-0 border-border/60 px-4 py-3 sm:px-5">
-          <DemoAction><Button size="sm" variant="outline" onClick={check} disabled={checking}>
-            {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            检查更新
-          </Button></DemoAction>
-        </div>
-
-        {info?.ok && (
-          <Alert variant="default" className={cn("!w-auto mx-4 my-4 sm:mx-5", info.hasUpdate && "border-primary/35 bg-primary/[0.06]")}>
-            {info.hasUpdate && <ArrowUpCircle className="text-primary" />}
-            <AlertDescription className="space-y-2">
-              <AlertTitle className={cn(info.hasUpdate && "text-primary")}>{info.hasUpdate ? "发现新版本" : "更新检查完成"}</AlertTitle>
-              <div className="text-sm">
-                {info.hasUpdate
-                  ? `发现新版本 v${info.latest}（当前 v${info.current}）`
-                  : `已是最新版本 v${info.current}`}
-                {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
-              </div>
-              {info.hasUpdate && (
-                <DemoAction>
-                  {snapshot.phase === "readyToRestart" ? (
-                    <Button size="sm" onClick={() => void restartNow()} disabled={restarting}>
-                      {restarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                      {restarting ? "正在重启…" : "重启以完成升级"}
-                    </Button>
-                  ) : (
-                    <Button size="sm" onClick={() => setInstallOpen(true)}>
-                      <ArrowUpCircle />
-                      立即升级
-                    </Button>
-                  )}
-                </DemoAction>
-              )}
-              {info.releaseUrl && (
-                <DemoAction><Button
-                  variant="link"
-                  size="sm"
-                  className="h-auto p-0"
-                  onClick={() => void openReleaseUrl(info.releaseUrl)}
-                >
-                  打开 GitHub Release
-                </Button></DemoAction>
-              )}
-            </AlertDescription>
-          </Alert>
-        )}
-        <UpdateInstallDialog open={installOpen} onOpenChange={setInstallOpen} />
       </CardContent>
     </SettingsGroup>
   );
@@ -1793,7 +1616,7 @@ function ErrorLogCard() {
                 disabled={revealing || !path}
                 onClick={() => void revealLog()}
               >
-                {revealing ? <Loader2 className="animate-spin" /> : null}打开日志位置
+                {revealing ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : null}打开日志位置
               </Button>
             </DemoAction>
           </div>
@@ -2088,7 +1911,7 @@ function RateLimitCard() {
               disabled={busy}
               onClick={() => void onUninstall()}
             >
-              {busy ? <Loader2 className="animate-spin" /> : null}卸载 hook
+              {busy ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : null}卸载 hook
             </Button>
           ) : (
             <Button
@@ -2097,7 +1920,7 @@ function RateLimitCard() {
               disabled={busy || !status || existingTargets.length === 0}
               onClick={() => void onInstall()}
             >
-              {busy ? <Loader2 className="animate-spin" /> : null}接入 hook
+              {busy ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : null}接入 hook
             </Button>
           )}
         </SettingsFieldRow>
@@ -2113,7 +1936,7 @@ export default function SettingsPage() {
       <header className="mb-10 sm:mb-12">
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {api.isDemoMode() ? "限额监听、权限检测与自动更新配置。" : "自动签到、限额监听、权限检测与自动更新配置。"}
+          {api.isDemoMode() ? "限额监听、权限检测与应用更新设置。" : "自动签到、限额监听、权限检测与应用更新设置。"}
         </p>
       </header>
 

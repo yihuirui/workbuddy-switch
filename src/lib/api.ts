@@ -100,6 +100,19 @@ function requireCompanionDesktop(): void {
   if (!isDesktop()) throw new Error("Agent Companion 仅在桌面版中可用");
 }
 
+// WebUI per-launch credential arrives in a URL fragment (never sent in HTTP
+// requests or referrers). Session storage permits reloads in the same tab.
+function webuiSession(): string {
+  if (typeof window === "undefined" || typeof sessionStorage === "undefined") return "";
+  const hash = new URLSearchParams((window.location.hash ?? "").slice(1));
+  const token = hash.get("wb-session");
+  if (token && /^[a-f0-9]{64}$/.test(token)) {
+    sessionStorage.setItem("wb-webui-session", token);
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  return sessionStorage.getItem("wb-webui-session") ?? "";
+}
+
 type Route = { method: "GET" | "POST"; path: string };
 
 /** Tauri command → HTTP 路由映射（webui 模式）。 */
@@ -233,7 +246,7 @@ async function httpCall<T>(cmd: string, args?: Record<string, unknown>): Promise
         : route.path;
     res = await fetch(url, {
       method: route.method,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${webuiSession()}` },
       body: route.method === "POST" ? JSON.stringify(args ?? {}) : undefined,
     });
   } catch {

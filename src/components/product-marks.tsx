@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 import workbuddyIcon from "@/assets/workbuddy-official-icon.png";
 import codebuddyCnIdeIcon from "@/assets/codebuddy-cn-ide-icon.png";
 
-const appIconUrl = `${import.meta.env.BASE_URL}icon-transparent.png`;
+import appIconUrl from "@/assets/workbuddy-switch2-app-icon.png";
 
 interface MarkProps {
   size?: number;
@@ -62,7 +62,7 @@ export function WorkBuddyAiMark({ size = 32, className }: MarkProps) {
   );
 }
 
-/** 应用自身的透明角色图标；桌面安装图标仍使用 public/icon.png。 */
+/** 用户选定的账号切换品牌图标，与桌面安装图标同源。 */
 export function AppIconMark({ size = 32, className }: MarkProps) {
   return (
     <span

@@ -19,7 +19,7 @@ use crate::modules::config::{
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const GITHUB_OWNER: &str = "changexbc";
+pub const GITHUB_OWNER: &str = "yihuirui";
 pub const GITHUB_REPO: &str = "workbuddy-switch";
 
 /// 成功结果缓存有效期（6 小时）。自动轮询（30 分钟）命中缓存，不发网络请求；
@@ -65,9 +65,9 @@ pub fn load_github_config() -> Value {
             }
         }
     }
-    // 旧版本截图/配置曾使用 changexbc/wb-switch；迁移到实际公开仓库。
-    if owner == "changexbc" && repo == "wb-switch" {
-        repo = GITHUB_REPO.to_string();
+    if let Some((public_owner, public_repo)) = public_fork_repository(&owner, &repo) {
+        owner = public_owner.to_string();
+        repo = public_repo.to_string();
         should_normalize = true;
     }
     let normalized = json!({"owner": owner, "repo": repo, "proxy": proxy});
@@ -78,6 +78,12 @@ pub fn load_github_config() -> Value {
         );
     }
     normalized
+}
+
+fn public_fork_repository(owner: &str, repo: &str) -> Option<(&'static str, &'static str)> {
+    let legacy_default = (owner == "changexbc" && matches!(repo, "wb-switch" | "workbuddy-switch"))
+        || (owner == "yihuirui" && repo.eq_ignore_ascii_case("Workbuddy-Switch2"));
+    legacy_default.then_some((GITHUB_OWNER, GITHUB_REPO))
 }
 
 /// 保存更新源配置；公开仓库不需要也不保存 GitHub token。
@@ -328,27 +334,40 @@ mod tests {
 
     #[test]
     fn updater_manifest_urls_macos_skips_duplicate_fallback() {
-        let urls = updater_manifest_urls("changexbc", "workbuddy-switch", "macos", "aarch64");
+        let urls = updater_manifest_urls(GITHUB_OWNER, GITHUB_REPO, "macos", "aarch64");
         assert_eq!(
             urls,
             vec![
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-aarch64.json",
+                "https://github.com/yihuirui/workbuddy-switch/releases/latest/download/latest.json",
+                "https://github.com/yihuirui/workbuddy-switch/releases/latest/download/latest-macos-aarch64.json",
             ]
         );
     }
 
     #[test]
     fn updater_manifest_urls_windows_keeps_macos_compat() {
-        let urls = updater_manifest_urls("changexbc", "workbuddy-switch", "windows", "x86_64");
+        let urls = updater_manifest_urls(GITHUB_OWNER, GITHUB_REPO, "windows", "x86_64");
         assert_eq!(
             urls,
             vec![
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest.json",
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-windows-x86_64.json",
-                "https://github.com/changexbc/workbuddy-switch/releases/latest/download/latest-macos-x86_64.json",
+                "https://github.com/yihuirui/workbuddy-switch/releases/latest/download/latest.json",
+                "https://github.com/yihuirui/workbuddy-switch/releases/latest/download/latest-windows-x86_64.json",
+                "https://github.com/yihuirui/workbuddy-switch/releases/latest/download/latest-macos-x86_64.json",
             ]
         );
+    }
+
+    #[test]
+    fn legacy_release_sources_migrate_to_the_public_fork() {
+        assert_eq!(
+            public_fork_repository("yihuirui", "Workbuddy-Switch2"),
+            Some(("yihuirui", "workbuddy-switch")),
+        );
+        assert_eq!(
+            public_fork_repository("changexbc", "workbuddy-switch"),
+            Some(("yihuirui", "workbuddy-switch")),
+        );
+        assert_eq!(public_fork_repository("someone", "custom-project"), None);
     }
 
     #[test]

@@ -1,8 +1,13 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
+#[cfg(feature = "companion")]
+mod companion;
+#[cfg(not(feature = "companion"))]
+#[path = "companion_disabled.rs"]
 mod companion;
 #[cfg(target_os = "macos")]
 mod instance_lock;
+mod proxy_commands;
 #[cfg(desktop)]
 mod tray;
 mod update_service;
@@ -130,7 +135,7 @@ fn spawn_background_loops(app: tauri::AppHandle) {
     // 统一更新服务：首次 15 秒后检查一次，之后每 30 分钟（未带 force，走 core 的
     // 6 小时缓存）。检查由 Rust 常驻，替代前端 30 分钟轮询：轻量模式 / 主窗口关闭时
     // 同样在跑，托盘菜单随时反映最新阶段。
-    update_service::spawn_periodic_check(app.clone());
+    // Fork releases are delivered separately; never install upstream app updates.
 
     // 限额 hook 信号：轮询 `~/.wb-switch/hook-events.jsonl`（CLI / WorkBuddy 的 429 当轮
     // 由客户端 hook 追加），入账后通知前端立即拉取。轻量模式下窗口销毁但进程仍在，
@@ -171,7 +176,10 @@ pub fn run() {
 
     #[cfg(desktop)]
     if !is_screenshot_demo() {
-        builder = builder.plugin(agent_studio_desktop::init(companion::config()));
+        #[cfg(feature = "companion")]
+        {
+            builder = builder.plugin(agent_studio_desktop::init(companion::config()));
+        }
     }
 
     #[cfg(desktop)]
@@ -185,6 +193,10 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
+            if !is_screenshot_demo() {
+                modules::account::harden_storage()?;
+            }
+            proxy_commands::init_runtime(app).map_err(std::io::Error::other)?;
             #[cfg(desktop)]
             {
                 // 插件已在 initialize_plugins 阶段决定 notify-or-exit；此处只兜底
@@ -208,8 +220,20 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            proxy_commands::proxy_set_enabled,
+            proxy_commands::proxy_status,
+            proxy_commands::proxy_save_settings,
+            proxy_commands::proxy_start,
+            proxy_commands::proxy_stop,
+            proxy_commands::proxy_preview,
+            proxy_commands::proxy_sync,
+            proxy_commands::proxy_client_key,
+            proxy_commands::proxy_rotate_key,
+            proxy_commands::proxy_models,
+            proxy_commands::proxy_test_model,
             commands::get_status,
             commands::get_accounts,
+            commands::restore_accounts_backup,
             commands::get_codebuddy_cli_status,
             commands::install_codebuddy_cli_helper,
             commands::switch_codebuddy_cli_account,
@@ -309,6 +333,9 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|_app_handle, event| {
+        if matches!(&event, tauri::RunEvent::Exit) {
+            let _ = wb_switch_core::modules::proxy::stop();
+        }
         #[cfg(desktop)]
         {
             // 点击 Dock / Finder 再次激活已运行实例：窗口已隐藏到托盘时显示主窗口。

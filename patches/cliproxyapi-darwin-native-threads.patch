@@ -1,0 +1,122 @@
+diff --git a/internal/pluginhost/loader_unix.go b/internal/pluginhost/loader_unix.go
+index 636413a..04d217d 100644
+--- a/internal/pluginhost/loader_unix.go
++++ b/internal/pluginhost/loader_unix.go
+@@ -8,6 +8,9 @@ package pluginhost
+ #include <dlfcn.h>
+ #include <stdint.h>
+ #include <stdlib.h>
++#ifdef __APPLE__
++#include <pthread.h>
++#endif
+ 
+ typedef struct {
+ 	void* ptr;
+@@ -52,27 +55,94 @@ static const char* cliproxy_dlerror(void) {
+ 	return dlerror();
+ }
+ 
+-static int cliproxy_call_init(void* fn, const cliproxy_host_api* host, cliproxy_plugin_api* plugin) {
+-	return ((cliproxy_plugin_init_fn)fn)(host, plugin);
++// Go c-shared runtimes on Darwin must enter from a fresh native thread.
++// Both directions are isolated; joining keeps buffers alive for synchronous calls.
++#ifdef __APPLE__
++typedef struct {
++    int kind;
++    void* fn;
++    const cliproxy_host_api* host;
++    cliproxy_plugin_api* plugin;
++    const char* method;
++    const uint8_t* request;
++    size_t len;
++    cliproxy_buffer* response;
++    void* ptr;
++    int result;
++} cliproxy_native_job;
++
++static void* cliproxy_native_worker(void* opaque) {
++    cliproxy_native_job* job = (cliproxy_native_job*)opaque;
++    switch (job->kind) {
++    case 0: job->result = ((cliproxy_plugin_init_fn)job->fn)(job->host, job->plugin); break;
++    case 1: job->result = ((cliproxy_plugin_call_fn)job->fn)(job->method, job->request, job->len, job->response); break;
++    case 2: ((cliproxy_plugin_free_fn)job->fn)(job->ptr, job->len); break;
++    case 3: ((cliproxy_plugin_shutdown_fn)job->fn)(); break;
++    case 4: job->result = cliproxyHostCall(job->ptr, job->method, job->request, job->len, job->response); break;
++    case 5: cliproxyHostFree(job->ptr, job->len); break;
++    }
++    return NULL;
+ }
+-
+-static int cliproxy_call_plugin(cliproxy_plugin_call_fn fn, const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
+-	return fn(method, request, request_len, response);
++static int cliproxy_native_run(cliproxy_native_job* job) {
++    pthread_t thread;
++    int status = pthread_create(&thread, NULL, cliproxy_native_worker, job);
++    if (status != 0) return -1;
++    if (pthread_join(thread, NULL) != 0) abort();
++    return job->result;
++}
++static int cliproxy_isolated_host_call(void* ctx, const char* method, const uint8_t* request, size_t len, cliproxy_buffer* response) {
++    cliproxy_native_job job = {0};
++    job.kind=4; job.ptr=ctx; job.method=method; job.request=request; job.len=len; job.response=response;
++    return cliproxy_native_run(&job);
++}
++static void cliproxy_isolated_host_free(void* ptr, size_t len) {
++    cliproxy_native_job job = {0}; job.kind=5; job.ptr=ptr; job.len=len;
++    cliproxy_native_run(&job);
+ }
++#endif
+ 
++static int cliproxy_call_init(void* fn, const cliproxy_host_api* host, cliproxy_plugin_api* plugin) {
++#ifdef __APPLE__
++    cliproxy_native_job job = {0}; job.kind=0; job.fn=fn; job.host=host; job.plugin=plugin;
++    return cliproxy_native_run(&job);
++#else
++    return ((cliproxy_plugin_init_fn)fn)(host, plugin);
++#endif
++}
++static int cliproxy_call_plugin(cliproxy_plugin_call_fn fn, const char* method, const uint8_t* request, size_t len, cliproxy_buffer* response) {
++#ifdef __APPLE__
++    cliproxy_native_job job = {0}; job.kind=1; job.fn=(void*)fn; job.method=method; job.request=request; job.len=len; job.response=response;
++    return cliproxy_native_run(&job);
++#else
++    return fn(method, request, len, response);
++#endif
++}
+ static void cliproxy_free_plugin_buffer(cliproxy_plugin_free_fn fn, void* ptr, size_t len) {
+-	fn(ptr, len);
++#ifdef __APPLE__
++    cliproxy_native_job job = {0}; job.kind=2; job.fn=(void*)fn; job.ptr=ptr; job.len=len;
++    cliproxy_native_run(&job);
++#else
++    fn(ptr, len);
++#endif
+ }
+-
+ static void cliproxy_shutdown_plugin(cliproxy_plugin_shutdown_fn fn) {
+-	fn();
++#ifdef __APPLE__
++    cliproxy_native_job job = {0}; job.kind=3; job.fn=(void*)fn;
++    cliproxy_native_run(&job);
++#else
++    fn();
++#endif
+ }
+-
+ static void cliproxy_set_host_api(cliproxy_host_api* api, uint32_t abi_version, void* host_ctx) {
+-	api->abi_version = abi_version;
+-	api->host_ctx = host_ctx;
+-	api->call = cliproxyHostCall;
+-	api->free_buffer = cliproxyHostFree;
++    api->abi_version = abi_version;
++    api->host_ctx = host_ctx;
++#ifdef __APPLE__
++    api->call = cliproxy_isolated_host_call;
++    api->free_buffer = cliproxy_isolated_host_free;
++#else
++    api->call = cliproxyHostCall;
++    api->free_buffer = cliproxyHostFree;
++#endif
+ }
+ 
+ */

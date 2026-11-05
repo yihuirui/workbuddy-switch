@@ -1,22 +1,23 @@
 {
-  "name": "wb-switch-rust",
+  "name": "workbuddy-switch2",
   "private": true,
-  "version": "0.1.62",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:desktop": "node scripts/prepare-agent-companion.mjs dev && vite",
     "dev:demo": "node scripts/prepare-companion-demo.mjs dev && VITE_DEMO_MODE=1 vite",
     "dev:screenshot": "node scripts/prepare-companion-demo.mjs dev && VITE_DEMO_MODE=1 vite",
-    "tauri:dev:screenshot": "WB_SWITCH_SCREENSHOT_DEMO=1 VITE_DEMO_MODE=1 tauri dev",
+    "tauri:dev:screenshot": "cd src-tauri && WB_SWITCH_SCREENSHOT_DEMO=1 VITE_DEMO_MODE=1 tauri dev",
     "build": "node scripts/prepare-companion-demo.mjs clean && tsc && vite build",
     "build:desktop": "node scripts/prepare-agent-companion.mjs build && npm run build && node scripts/prepare-agent-companion.mjs copy",
     "build:demo": "node scripts/prepare-companion-demo.mjs build && tsc && VITE_DEMO_MODE=1 VITE_PAGES_DEMO=1 vite build && node scripts/prepare-companion-demo.mjs copy",
     "test": "vitest run",
     "preview": "vite preview",
-    "tauri": "tauri",
-    "build:app": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --debug --bundles app; sh scripts/fix-app.sh",
-    "build:app:release": "TAURI_SIGNING_PRIVATE_KEY=\"$(cat \"$HOME/.wb-switch/wb-switch-updater.key\")\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=wb-switch-dev npm run tauri build -- --bundles app; sh scripts/fix-app.sh"
+    "tauri": "cd src-tauri && tauri",
+    "verify:release-runtime": "python3 scripts/check-release-runtime.py",
+    "build:app": "npm run tauri build -- --debug --bundles app",
+    "build:app:release": "npm run tauri build -- --bundles app"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
@@ -61,7 +62,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "vitest": "^5.0.2"
+    "vite": "^7.3.7",
+    "vitest": "^5.0.3"
   }
 }

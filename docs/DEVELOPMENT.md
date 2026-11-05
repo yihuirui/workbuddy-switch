@@ -1,49 +1,41 @@
-# 开发指南
+# Development and release
 
-## 环境要求
+## Supported macOS builds
 
-Node.js ≥ 20、Rust stable、macOS（或 Windows/Linux）。
-
-## 开发命令
+The preview build targets macOS 15.0 or newer on Apple silicon (ARM64) and Intel (x86_64). Install Node.js 24.18.1, Rust 1.99.1 with the target for the chosen architecture, Go 1.26.10, and Xcode Command Line Tools. Use a fresh source checkout; it intentionally does not include prebuilt runtime binaries. Do not prepare a runtime inside an existing working copy that already has ignored `runtime/` files. The fetcher refuses to replace binaries of a different architecture, and Tauri's pre-build gate checks the selected binary architectures and manifest hashes.
 
 ```bash
-npm install
-npm run tauri dev        # 开发模式
-npm run build:app        # 构建 debug .app（含前端资源补丁）
-npm run build:app:release  # 构建 release .app + 签名更新包
+npm ci
+WB_RUNTIME_ARCH=arm64 python3 scripts/fetch-proxy-runtime.py
+WB_RUNTIME_ARCH=arm64 python3 scripts/build-patched-engine.py
+WB_RUNTIME_ARCH=arm64 python3 scripts/update-runtime-manifest.py
+WB_RUNTIME_ARCH=arm64 python3 scripts/smoke-proxy-runtime.py
+npm test
+npm run tauri -- build --target aarch64-apple-darwin --bundles app
 ```
 
-## 发布新版本
+For Intel, set `WB_RUNTIME_ARCH=x86_64` on each runtime command and build with `--target x86_64-apple-darwin`. On Apple silicon, the Go runtime builder configures clang for x86_64 cgo output; use an x86_64 Rust target. See [Intel Mac build](INTEL_MAC_BUILD.md). `runtime.lock.json` pins both architectures' upstream engine and plugin archives by SHA-256. The smoke test uses an empty temporary account store and does not send model requests.
 
-签名密钥（自动更新用）存放于 `~/.wb-switch/wb-switch-updater.key`，构建脚本通过
-`TAURI_SIGNING_PRIVATE_KEY` 注入。发布新版本时：
+## App icon resources
 
-1. `npm run build:app:release` 生成 `.app.tar.gz` + `.sig`（Windows NSIS 构建会额外生成当前版本的 `*_x64-setup.exe` + `.exe.sig`）。CI 会先清掉 `target/**/release/bundle`，避免 cargo cache 把旧安装包带进 Release。
-2. macOS：`UPDATE_OS=macos UPDATE_ARCH=aarch64 sh scripts/gen-update-json.sh` 生成 `latest-macos-aarch64.json`；Intel 用 `UPDATE_ARCH=x86_64`
-3. Windows：`UPDATE_OS=windows UPDATE_ARCH=x86_64 sh scripts/gen-update-json.sh` 生成 `latest-windows-x86_64.json`
-4. `python3 scripts/merge-update-manifests.py <产物目录>` 合并为 `latest.json`，并把 Windows 平台项写入 `latest-macos-x86_64.json`（兼容已安装的 Windows 客户端）
-5. 将安装包、签名更新包、`latest*.json` 一并上传到 GitHub Release
+The untouched high-resolution artwork is `src-tauri/icons/account-switch/icon-source-20261031.png`. `scripts/prepare-macos-icon-source.py` applies a macOS-style 22.37% rounded-square alpha mask with 4× edge supersampling, adds transparent corners, and preserves every original RGB pixel. Regenerate the rounded source and Tauri PNG, ICO, and ICNS resources with `scripts/generate-account-switch-icons.sh` after installing npm dependencies. The resulting ICNS includes transparent corners and antialiased edges; do not apply another mask to the rounded source.
 
-### npm 版（webui）发布
+## Preview packaging
 
-1. 编译 server 二进制并上传 GitHub Release（`.github/workflows/build.yml` 自动执行）
-2. `cd npm && npm publish`（包名 `workbuddy-switch`，postinstall 按平台从 Release 下载二进制）
+The manual GitHub Actions workflow builds ARM64 and x86_64 apps separately and uploads architecture-specific workflow artifacts. It does not publish npm packages or create a GitHub Release. The local packaging helper verifies the `.app`, creates a ZIP, and writes a SHA-256 file. A maintainer can then review and upload those artifacts to the repository's Releases page.
 
-## 目录结构
+Preview builds are not Developer ID signed or Apple-notarized. Do not describe the build as notarized or as supporting untested platforms.
 
-```
-src-tauri/
-  src/
-    commands.rs      # Tauri command 薄包装（对应 Python 版 HTTP API）
-    modules/         # 已抽离到 crates/wb-switch-core（三宿主复用）
-crates/
-  wb-switch-core/    # 核心逻辑：account/auth_file/oauth/process/switch/session/checkin/refresh/update/config
-  wb-switch-server/  # HTTP server + CLI：axum API + rust-embed 前端
-src/                 # 前端：components/pages/lib（api.ts 双通道：Tauri invoke / HTTP fetch）
-npm/                 # npm 包：package.json + bin + scripts/install.js
+## Source export
+
+Generate the public source file list with:
+
+Pass separate destinations outside the checkout so the export cannot include itself:
+
+```bash
+python3 scripts/public-source-manifest.py \
+  --export-dir ../workbuddy-switch2-source \
+  --output ../workbuddy-switch2-source-manifest.json
 ```
 
-## 隐私注意事项
-
-- 仓库不提交本地数据（accounts.json、认证文件、密钥、token 由 `.gitignore` 排除）
-- 发布前用 `git grep` 扫描 token 模式（`ghp_`/`npm_`/`gho_` 等）
+The exporter excludes local outputs, prebuilt runtime binaries, build caches, adaptive-agent state, personal reports, and non-required icon drafts. It includes the project license, third-party notices, and required vendored source and licenses.

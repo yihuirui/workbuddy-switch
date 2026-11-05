@@ -32,7 +32,7 @@ use crate::modules::account::{
     account_display_name, build_auth_headers, envelope_token_error, load_accounts, variant_of,
 };
 use crate::modules::config::{
-    add_checkin_log, http_request, is_route_missing, load_checkin_config, load_checkin_logs,
+    add_checkin_log, http_request_quick, is_route_missing, load_checkin_config, load_checkin_logs,
     now_ms, parse_clock, RunFlagGuard, CHECKIN_API_PREFIX,
 };
 use crate::modules::refresh::{ensure_fresh_token, refresh_account_token};
@@ -57,6 +57,13 @@ const FAST_RETRY_MAX: u32 = 12;
 
 /// 窗口模式下两轮之间的最小间隔（到点即办）。
 const MIN_CYCLE_DELAY: Duration = Duration::from_secs(60);
+
+/// 整轮签到（自动周期 / 一键签到）的总时长上限。
+///
+/// 单账号一轮最多串行 4 个请求；账号一多就会累积成分钟级等待，而界面只有整块
+/// loading、没有逐行进度，用户看到的就是「点了没反应、一直转圈」。到点即中止，
+/// 已完成的结果照常返回，未处理的账号留给下一轮。
+const CHECKIN_ROUND_DEADLINE: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CheckinCycleMode {
@@ -146,9 +153,14 @@ async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -
     }
     let url = format!("{}{path}", variant.api_endpoint());
     let headers = build_auth_headers(account);
-    let mut resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
+    let mut resp = http_request_quick(&url, "POST", Some(json!({})), Some(&headers)).await;
     // 国际版「未开放 / 已过期」类业务码：直接返回，绝不刷新、绝不重试。
     if skips_refresh_before_retry(variant, &resp) {
+        return resp;
+    }
+    // 网关 HTML 鉴权页不是 token 失效：刷新再发一次只会多烧一个超时窗口，
+    // 逐账号累积后表现为界面长时间转圈。命中即原样返回。
+    if is_gateway_auth_error(&resp) {
         return resp;
     }
     if is_unauthorized(&resp)
@@ -160,9 +172,20 @@ async fn checkin_request_once(path: &str, account: &Value, variant: WbVariant) -
     {
         let refreshed = refresh_account_token(account.clone()).await;
         let headers = build_auth_headers(&refreshed);
-        resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
+        resp = http_request_quick(&url, "POST", Some(json!({})), Some(&headers)).await;
     }
     resp
+}
+
+/// 网关（openresty / APISIX 等）直接返回的 HTML 鉴权页。
+///
+/// 这类响应由 `normalize_error_body` 归一化成「服务端返回 HTML 错误页：…」，带
+/// `code: 401`。它不是业务侧 token 失效，而是请求没进到应用层；刷新 token 再发
+/// 一次没有任何意义，只会让每个账号多耗一个超时窗口。
+fn is_gateway_auth_error(resp: &Value) -> bool {
+    resp.get("message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.contains("HTML 错误页"))
 }
 
 /// 发签到相关请求：路径候选按档位生成，**只有 404 才回落**到下一个候选。
@@ -320,13 +343,15 @@ pub async fn checkin_account(account: &Value) -> Value {
     match decide_from_status(&status) {
         StatusDecision::Already => return json!({"result": "already"}),
         StatusDecision::Error(error) => {
+            // A failed status lookup exits before daily-checkin is submitted. Persist it so
+            // automatic failures remain visible in Settings → Check-in log.
+            record_checkin_error(&acc, &error);
             return json!({"result": "error", "error": error});
         }
         StatusDecision::Submit => {}
     }
 
-    // Only this branch submits daily-checkin, so only its outcome is eligible
-    // for the sign-in log.
+    // Record the submission outcome here; status-query errors are recorded at their return path.
     let entry = json!({
         "ts": now_ms(),
         "accountId": acc.get("id").cloned().unwrap_or(Value::Null),
@@ -372,6 +397,45 @@ pub async fn checkin_account(account: &Value) -> Value {
     }
     add_checkin_log(&entry_map);
     json!({"result": result, "error": error})
+}
+
+fn checkin_error_entry(account: &Value, error: &str, ts: i64) -> Value {
+    json!({
+        "ts": ts,
+        "accountId": account.get("id").cloned().unwrap_or(Value::Null),
+        "email": account_display_name(account),
+        "variant": variant_of(account).as_str(),
+        "result": "error",
+        "error": error,
+    })
+}
+
+fn record_checkin_error(account: &Value, error: &str) {
+    add_checkin_log(&checkin_error_entry(account, error, now_ms()));
+}
+
+/// 受整轮截止时间约束的单账号签到。
+///
+/// 调用方持有一个整轮 deadline；这里既拒绝「已经超时还继续排队」，也把单个账号
+/// 的执行截断在剩余预算内，避免一个卡住的账号吃掉整轮的时间。
+async fn checkin_account_before(account: &Value, deadline: tokio::time::Instant) -> Value {
+    let now = tokio::time::Instant::now();
+    if now >= deadline {
+        return json!({
+            "result": "error",
+            "error": "本轮签到已超过总时长上限，剩余账号将在下一轮继续",
+        });
+    }
+    match tokio::time::timeout(deadline - now, checkin_account(account)).await {
+        Ok(value) => value,
+        Err(_) => {
+            let error = "签到请求超时（已达本轮总时长上限）";
+            // The timeout cancels the in-flight future, so checkin_account cannot write its
+            // usual result row. Record the timeout here while account identity is available.
+            record_checkin_error(account, error);
+            json!({"result": "error", "error": error})
+        }
+    }
 }
 
 pub fn date_str(ts_ms: Option<i64>) -> String {
@@ -724,8 +788,9 @@ pub async fn run_checkin_cycle(_mode: CheckinCycleMode) -> Value {
     }
     let mut summary = json!({"status": "ok", "accounts": []});
     let mut had_errors = false;
+    let deadline = tokio::time::Instant::now() + CHECKIN_ROUND_DEADLINE;
     for acc in accounts {
-        let result = checkin_account(&acc).await;
+        let result = checkin_account_before(&acc, deadline).await;
         let outcome = result.get("result").and_then(Value::as_str);
         if outcome == Some("error") {
             had_errors = true;
@@ -869,8 +934,10 @@ pub async fn run_checkin_all(variant: Option<WbVariant>, respect_window: bool) -
 /// 批量签到的逐账号结果行；被排除账号不 poll 操作，因此不会发起任何请求。
 async fn checkin_all_rows(accounts: Vec<Value>, cfg: &Value) -> Vec<Value> {
     let mut results: Vec<Value> = Vec::new();
+    let deadline = tokio::time::Instant::now() + CHECKIN_ROUND_DEADLINE;
     for acc in accounts {
-        let r = with_auto_checkin_preference(&acc, cfg, checkin_account(&acc)).await;
+        let r =
+            with_auto_checkin_preference(&acc, cfg, checkin_account_before(&acc, deadline)).await;
         let mut row = json!({
             "accountId": acc.get("id").cloned().unwrap_or(Value::Null),
             "email": account_display_name(&acc),
@@ -891,6 +958,34 @@ async fn checkin_all_rows(accounts: Vec<Value>, cfg: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_lookup_failure_log_contains_account_and_reason() {
+        let account = json!({"id": "synthetic", "email": "example@test.invalid", "variant": "cn"});
+        let entry = checkin_error_entry(&account, "synthetic network error", 1234);
+        assert_eq!(entry["ts"], 1234);
+        assert_eq!(entry["accountId"], "synthetic");
+        assert_eq!(entry["email"], "example@test.invalid");
+        assert_eq!(entry["variant"], "cn");
+        assert_eq!(entry["result"], "error");
+        assert_eq!(entry["error"], "synthetic network error");
+    }
+
+    /// 网关（APISIX / openresty）返回的 HTML 401 不是 token 失效：不应触发刷新重试，
+    /// 否则每个账号白烧一个超时窗口，累积成界面长时间转圈。
+    #[test]
+    fn gateway_html_auth_error_skips_refresh() {
+        let gateway = json!({
+            "code": 401,
+            "message": "服务端返回 HTML 错误页：401 Authorization Required",
+        });
+        assert!(is_unauthorized(&gateway), "仍是鉴权失败，供上层判错");
+        assert!(is_gateway_auth_error(&gateway), "网关页应短路刷新");
+
+        let business = json!({"code": 401, "message": "token expired"});
+        assert!(is_unauthorized(&business));
+        assert!(!is_gateway_auth_error(&business), "业务 401 仍应刷新重试");
+    }
 
     /// 回归 issue #94：信封凭据的签到请求应在入口短路并返回可读错误，
     /// 不发出空 Bearer（此前会被网关 401 后把 HTML 原样回显）。

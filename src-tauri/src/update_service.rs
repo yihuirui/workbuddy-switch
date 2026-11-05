@@ -14,7 +14,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -23,11 +22,6 @@ use tauri_plugin_updater::UpdaterExt;
 
 use wb_switch_core::modules::config::now_secs;
 use wb_switch_core::modules::update;
-
-/// 后台首次检查延迟：启动 15 秒后（替代前端 30 分钟轮询的首屏延迟）。
-pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(15);
-/// 后台检查间隔（30 分钟）。
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 const BUSY_MESSAGE: &str = "更新任务正在进行中，请稍候";
 const NO_PACKAGE_MESSAGE: &str = "没有可安装的更新包，请先下载更新包";
@@ -289,6 +283,9 @@ fn should_rebuild_menu(percent: u8) -> bool {
 ///
 /// 已有更新任务在跑时直接返回忙碌错误，不并发触发第二次检查。
 pub async fn check<R: Runtime>(app: &AppHandle<R>, proxy: Option<&str>, force: bool) -> Value {
+    if !FORK_UPDATES_ENABLED {
+        return json!({"ok":false,"message":"Workbuddy-Switch2 预览版暂不提供自动更新，请从 Release 页面手动获取新版本。"});
+    }
     let Some(_busy) = BusyGuard::acquire() else {
         // 互斥拒绝不写日志到 stderr 之外：托盘文案已表达同一件事。
         eprintln!("[更新] 已有任务在跑，跳过本次检查");
@@ -316,6 +313,9 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>, proxy: Option<&str>, force: b
 /// 下载在后台任务里进行（含重新 check 一次以拿到 `Update` 句柄），因此托盘与前端
 /// 都不需要等网络；重复调用由 `BUSY` 拒绝。
 pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if !FORK_UPDATES_ENABLED {
+        return Err("Workbuddy-Switch2 预览版不提供自动更新安装".into());
+    }
     if crate::is_screenshot_demo() {
         return Err(DEMO_DOWNLOAD_MESSAGE.to_string());
     }
@@ -365,6 +365,9 @@ pub fn start_download<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 ///
 /// 无包时返回可读错误（不 panic）；安装失败置 Error + 通知，并释放已暂存的包。
 pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    if !FORK_UPDATES_ENABLED {
+        return Err("Workbuddy-Switch2 预览版不提供自动更新安装".into());
+    }
     if crate::is_screenshot_demo() {
         return Err(DEMO_RESTART_MESSAGE.to_string());
     }
@@ -413,20 +416,6 @@ pub async fn restart<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             Err(message)
         }
     }
-}
-
-/// 后台定时检查：首次延迟 [`FIRST_CHECK_DELAY`]，之后每 [`CHECK_INTERVAL`] 一次。
-///
-/// 常驻循环随进程存活，轻量模式（WebView 销毁）与主窗口关闭时同样在跑；
-/// 未带 force 走 core 的 6 小时缓存，因此多数轮次不发网络请求。
-pub fn spawn_periodic_check(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(FIRST_CHECK_DELAY).await;
-        loop {
-            let _ = check(&app, None, false).await;
-            tokio::time::sleep(CHECK_INTERVAL).await;
-        }
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -817,3 +806,5 @@ mod tests {
         assert_eq!(download_tooltip(None), "正在下载更新…");
     }
 }
+
+const FORK_UPDATES_ENABLED: bool = false;

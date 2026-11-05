@@ -459,6 +459,8 @@ export interface CheckinLog {
 export interface CheckinResult {
   result: string;
   error?: string;
+  reason?: string;
+  message?: string;
   /** 国际版签到活动未开放时的业务判定；不写成功日志、不计入失败重试。 */
   inactive?: boolean;
 }

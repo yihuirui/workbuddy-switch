@@ -13,11 +13,9 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use wb_switch_core::modules::{checkin, update};
 
-use crate::update_service::{UpdatePhase, UpdateSnapshot};
-
 const TRAY_ID: &str = "main-menu-bar";
 const MAIN_WINDOW_LABEL: &str = "main";
-const DEFAULT_TOOLTIP: &str = "workbuddy-switch";
+const DEFAULT_TOOLTIP: &str = "Workbuddy-Switch2";
 const CHECKIN_TOOLTIP_RESTORE_SECS: u64 = 8;
 
 /// 系统自启注册的启动参数：仅携带该精确参数的启动进入静默托盘模式。
@@ -34,9 +32,9 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(tray_icon())
-        // 模板图标（系统按明暗自适应着色）是 macOS 独有的语义；
-        // Windows/Linux 会忽略该标记并直接贴原始像素，用单色剪影会显示成纯白方块。
-        .icon_as_template(cfg!(target_os = "macos"))
+        // 菜单栏直接显示新版彩色猫应用图，保留橙色吉祥物；不能标记为模板图标，
+        // 否则 macOS 会把 RGBA 素材当 alpha mask 渲染成旧式单色剪影。
+        .icon_as_template(false)
         .tooltip(DEFAULT_TOOLTIP)
         .menu(&menu)
         // 左键弹菜单只保留在 macOS：菜单栏图标的惯例本就是左键展开菜单。
@@ -271,7 +269,7 @@ fn apply_macos_app_icon() {
 
     // `tauri dev` has no `.app` bundle; keep the PNG fallback so Dock is not "exec".
     const APP_ICON_PNG: &[u8] =
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.png"));
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/account-switch/icon.png"));
     let data = NSData::with_bytes(APP_ICON_PNG);
     let Some(icon) = NSImage::initWithData(NSImage::alloc(), &data) else {
         return;
@@ -551,19 +549,11 @@ pub(crate) fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 enum UpdateMenuAction {
     /// 检查更新。
     Check,
-    /// 下载 / 重试下载。
-    Download,
-    /// 安装并重启。
-    Restart,
 }
 
 impl UpdateMenuAction {
     fn id(self) -> &'static str {
-        match self {
-            Self::Check => "check-update",
-            Self::Download => "update-now",
-            Self::Restart => "update-restart",
-        }
+        "check-update"
     }
 }
 
@@ -571,49 +561,12 @@ impl UpdateMenuAction {
 ///
 /// 菜单与前端弹窗读同一份快照，因此同一时刻两处显示的是同一阶段。
 /// `Error` 按是否已知目标版本区分两种重试文案：已知版本 → 重试下载；未知 → 重试检查。
-fn update_menu_spec(snapshot: &UpdateSnapshot) -> (UpdateMenuAction, String, bool) {
-    match snapshot.phase {
-        UpdatePhase::Idle | UpdatePhase::UpToDate => {
-            (UpdateMenuAction::Check, "检查更新".to_string(), true)
-        }
-        UpdatePhase::Checking => (UpdateMenuAction::Check, "正在检查…".to_string(), false),
-        UpdatePhase::Available => (
-            UpdateMenuAction::Download,
-            match snapshot.latest.as_deref() {
-                Some(latest) => format!("升级到 v{latest}"),
-                None => "升级到新版本".to_string(),
-            },
-            true,
-        ),
-        UpdatePhase::Downloading => (
-            UpdateMenuAction::Download,
-            match snapshot.percent {
-                Some(percent) => format!("正在下载更新 {percent}%"),
-                None => "正在下载更新…".to_string(),
-            },
-            false,
-        ),
-        UpdatePhase::ReadyToRestart => (
-            UpdateMenuAction::Restart,
-            "重启以完成升级".to_string(),
-            true,
-        ),
-        UpdatePhase::Error => {
-            if snapshot.latest.is_some() {
-                (
-                    UpdateMenuAction::Download,
-                    "更新失败，点击重试".to_string(),
-                    true,
-                )
-            } else {
-                (
-                    UpdateMenuAction::Check,
-                    "检查更新失败，点击重试".to_string(),
-                    true,
-                )
-            }
-        }
-    }
+fn update_menu_spec() -> (UpdateMenuAction, String, bool) {
+    (
+        UpdateMenuAction::Check,
+        "预览版暂不提供自动更新".to_string(),
+        false,
+    )
 }
 
 fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
@@ -636,8 +589,7 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         checkin_enabled,
         None::<&str>,
     )?;
-    let (update_action, update_label, update_enabled) =
-        update_menu_spec(&crate::update_service::snapshot());
+    let (update_action, update_label, update_enabled) = update_menu_spec();
     let update_item = MenuItem::with_id(
         app,
         update_action.id(),
@@ -653,8 +605,10 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         LIGHTWEIGHT_MODE.load(Ordering::Acquire),
         None::<&str>,
     )?;
-    let companion_enabled =
-        !crate::is_screenshot_demo() && agent_studio_desktop::is_enabled(app.app_handle());
+    #[cfg(feature = "companion")]
+    let companion_enabled = !crate::is_screenshot_demo() && agent_studio_desktop::is_enabled(app.app_handle());
+    #[cfg(not(feature = "companion"))]
+    let companion_enabled = false;
     let companion_toggle = MenuItem::with_id(
         app,
         "companion-toggle",
@@ -687,14 +641,14 @@ fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>>
         .build()
 }
 
-/// macOS 托盘图标：单色模板素材（系统按明暗主题自动着色）。
+/// macOS 菜单栏图标：新版彩色猫应用图的 36×36 预缩放资源。
 ///
-/// 注意：函数名 `tray_icon` 为跨平台统称；macOS 侧历史名为 `menu_bar_icon`。
+/// 保留原图透明圆角，并直接显示彩色像素；不要切换为 macOS template mask。
 #[cfg(target_os = "macos")]
 fn tray_icon() -> tauri::image::Image<'static> {
     const ICON: &[u8; 36 * 36 * 4] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/icons/tray-icon-template.rgba"
+        "/icons/tray-icon-macos-color.rgba"
     ));
     tauri::image::Image::new(ICON, 36, 36)
 }
@@ -728,7 +682,7 @@ fn color_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::new(ICON, 32, 32)
 }
 
-/// 深色单色猫：浅色任务栏下使用（与 macOS 模板同一份猫形，由生成脚本重着色）。
+/// 深色单色猫：浅色任务栏下使用（与白色版取自同一简化轮廓，由生成脚本重着色）。
 #[cfg(windows)]
 fn mono_black_icon() -> tauri::image::Image<'static> {
     const ICON: &[u8; 32 * 32 * 4] = include_bytes!(concat!(
@@ -916,21 +870,20 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn tray_icon_has_transparency_and_antialiasing() {
+    fn tray_icon_is_colored_with_transparency_and_antialiasing() {
         let icon = tray_icon();
         assert_eq!((icon.width(), icon.height()), (36, 36));
-        assert!(icon
-            .rgba()
-            .as_chunks::<4>()
-            .0
+        let px: Vec<&[u8]> = icon.rgba().chunks_exact(4).collect();
+        assert!(px.iter().any(|pixel| pixel[3] == 0), "四角应保持透明");
+        assert!(px
             .iter()
-            .any(|pixel| pixel[3] == 0));
-        assert!(icon
-            .rgba()
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .any(|pixel| (1..=254).contains(&pixel[3])));
+            .any(|pixel| (1..=254).contains(&pixel[3])), "圆角应有抗锯齿");
+        assert!(px.iter().any(|pixel| {
+            pixel[3] > 200
+                && ((pixel[0] as i32 - pixel[1] as i32).abs() > 12
+                    || (pixel[1] as i32 - pixel[2] as i32).abs() > 12
+                    || (pixel[0] as i32 - pixel[2] as i32).abs() > 12)
+        }), "菜单栏图标应保留新版应用图标的彩色像素");
     }
 
     /// Linux：托盘素材必须是**彩色透明底**，避免退化成白块 / 白底方图。
@@ -1218,88 +1171,12 @@ mod tests {
         );
     }
 
-    /// 托盘更新入口的阶段映射（文案见 design §6，菜单与前端弹窗共用同一快照）。
+    /// Preview builds expose no automatic updater action.
     #[test]
-    fn update_menu_spec_maps_each_phase_to_its_entry() {
-        use super::{update_menu_spec, UpdateMenuAction, UpdatePhase, UpdateSnapshot};
-
-        let snapshot =
-            |phase: UpdatePhase, latest: Option<&str>, percent: Option<u8>| UpdateSnapshot {
-                phase,
-                latest: latest.map(str::to_string),
-                percent,
-                message: None,
-                checked_at: None,
-            };
-
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Idle, None, None)),
-            (UpdateMenuAction::Check, "检查更新".to_string(), true)
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::UpToDate, None, None)),
-            (UpdateMenuAction::Check, "检查更新".to_string(), true)
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Checking, None, None)),
-            (UpdateMenuAction::Check, "正在检查…".to_string(), false),
-            "检查中不可重复点击"
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Available, Some("0.1.48"), None)),
-            (
-                UpdateMenuAction::Download,
-                "升级到 v0.1.48".to_string(),
-                true
-            )
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(
-                UpdatePhase::Downloading,
-                Some("0.1.48"),
-                Some(42)
-            )),
-            (
-                UpdateMenuAction::Download,
-                "正在下载更新 42%".to_string(),
-                false
-            )
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Downloading, Some("0.1.48"), None)),
-            (
-                UpdateMenuAction::Download,
-                "正在下载更新…".to_string(),
-                false
-            ),
-            "总量未知时只显示进行中，不显示假百分比"
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::ReadyToRestart, Some("0.1.48"), None)),
-            (
-                UpdateMenuAction::Restart,
-                "重启以完成升级".to_string(),
-                true
-            ),
-            "重启时机由用户决定，不自动重启"
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Error, Some("0.1.48"), None)),
-            (
-                UpdateMenuAction::Download,
-                "更新失败，点击重试".to_string(),
-                true
-            ),
-            "已知目标版本 → 重试的是下载"
-        );
-        assert_eq!(
-            update_menu_spec(&snapshot(UpdatePhase::Error, None, None)),
-            (
-                UpdateMenuAction::Check,
-                "检查更新失败，点击重试".to_string(),
-                true
-            ),
-            "未知版本 → 重试的是检查"
-        );
+    fn update_menu_spec_disables_automatic_updates_for_preview() {
+        let (action, label, enabled) = super::update_menu_spec();
+        assert_eq!(action.id(), "check-update");
+        assert_eq!(label, "预览版暂不提供自动更新");
+        assert!(!enabled);
     }
 }

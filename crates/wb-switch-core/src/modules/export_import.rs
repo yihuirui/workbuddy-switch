@@ -87,10 +87,10 @@ fn merge_import_record(accounts: &mut Vec<Value>, item: &Value) -> MergeOutcome 
         return MergeOutcome::Skipped;
     }
     if let Some(uid) = account::get_str(item, "uid").as_deref() {
-        if let Some(existing) = accounts
-            .iter_mut()
-            .find(|a| account::get_str(a, "uid").as_deref() == Some(uid))
-        {
+        if let Some(existing) = accounts.iter_mut().find(|a| {
+            account::get_str(a, "uid").as_deref() == Some(uid)
+                && account::variant_of(a) == account::variant_of(item)
+        }) {
             let mut replaced = item.clone();
             // 本地展示字段（备注 / 显示选择）：备份未携带时保留本地值；
             // 备份自带则以备份为准（导入即恢复用户当时的展示配置）。
@@ -105,7 +105,7 @@ fn merge_import_record(accounts: &mut Vec<Value>, item: &Value) -> MergeOutcome 
             }
             // 账号库不允许出现无 id 记录（删除按 id、列表 key、导出选择都依赖
             // id）：优先保留本地 id；本地也是无 id 的历史脏数据时补一个。
-            if account::get_str(&replaced, "id").is_none() {
+            {
                 replaced["id"] = account::get_str(existing, "id")
                     .map(Value::String)
                     .unwrap_or_else(|| Value::String(uuid::Uuid::new_v4().to_string()));
@@ -117,7 +117,9 @@ fn merge_import_record(accounts: &mut Vec<Value>, item: &Value) -> MergeOutcome 
     // 追加同样必须带 id：缺 id 的记录在刷新回写时无法被按 id 覆盖，会被
     // 反复追加副本（issue #111）。
     let mut appended = item.clone();
-    if account::get_str(&appended, "id").is_none() {
+    if account::get_str(&appended, "id").is_none()
+        || accounts.iter().any(|a| a.get("id") == appended.get("id"))
+    {
         appended["id"] = Value::String(uuid::Uuid::new_v4().to_string());
     }
     accounts.push(appended);
@@ -152,10 +154,7 @@ pub fn merge_import_records(
 
 /// 导入：读账号库 → 合并 → 写回，返回计数。
 pub fn import_accounts(text: &str, indexes: &[usize]) -> Result<ImportResult, String> {
-    let mut accounts = account::load_accounts();
-    let result = merge_import_records(&mut accounts, text, indexes)?;
-    account::save_accounts(&accounts).map_err(|e| format!("保存账号库失败：{e}"))?;
-    Ok(result)
+    account::mutate_accounts(|accounts| merge_import_records(accounts, text, indexes))
 }
 
 /// 纯函数：从账号列表中挑出 id 命中的完整记录（含 token）。
@@ -185,7 +184,7 @@ pub fn select_export_records(accounts: &[Value], ids: &[String]) -> Result<Vec<V
 
 /// 导出：按账号 id 列表返回完整记录（含 token）。
 pub fn export_accounts(ids: &[String]) -> Result<Vec<Value>, String> {
-    select_export_records(&account::load_accounts(), ids)
+    select_export_records(&account::load_accounts_checked()?, ids)
 }
 
 /// 导出文件名白名单：只允许 `wb-switch-accounts-YYYY-MM-DD.json` 这类由前端生成的文件名。
@@ -236,7 +235,7 @@ pub fn write_records_to_file(
 /// 导出：按账号 id 列表把完整记录写入用户选择的路径（保存对话框产物），返回该路径。
 pub fn export_accounts_to_path(ids: &[String], path: &str) -> Result<String, String> {
     validate_export_path(path)?;
-    let records = select_export_records(&account::load_accounts(), ids)?;
+    let records = select_export_records(&account::load_accounts_checked()?, ids)?;
     let path_buf = PathBuf::from(path.trim());
     let content = serde_json::to_string_pretty(&records).map_err(|e| e.to_string())?;
     crate::modules::config::atomic_write(&path_buf, &content)
@@ -285,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_overwrites_same_uid_preserving_imported_record() {
+    fn merge_overwrites_credentials_preserving_local_id() {
         let mut accounts = vec![record("local", Some("u1"), "旧名称", None, true)];
         let text = r#"[{ "id": "imported", "uid": "u1", "nickname": "新名称", "access_token": "tok-new" }]"#;
         let result = merge_import_records(&mut accounts, text, &[0]).unwrap();
@@ -293,7 +292,7 @@ mod tests {
         assert_eq!(result.overwritten, 1);
         assert_eq!(result.skipped, 0);
         assert_eq!(accounts.len(), 1, "同 uid 应覆盖而不是新增");
-        assert_eq!(accounts[0]["id"], "imported", "覆盖保留导入记录原样");
+        assert_eq!(accounts[0]["id"], "local", "更新凭据须保留本地引用");
         assert_eq!(accounts[0]["nickname"], "新名称");
         assert_eq!(accounts[0]["access_token"], "tok-new");
     }
@@ -393,7 +392,8 @@ mod tests {
         assert_eq!(result.imported, 2);
         assert_eq!(result.overwritten, 1);
         assert_eq!(accounts.len(), 1, "文件内重复 uid 也不得产生重复账号");
-        assert_eq!(accounts[0]["id"], "f2");
+        assert_eq!(accounts[0]["id"], "f1");
+        assert_eq!(accounts[0]["access_token"], "t2");
     }
 
     /// 回归 issue #111：导入记录缺 id 时必须补一个，否则刷新回写会反复追加副本。

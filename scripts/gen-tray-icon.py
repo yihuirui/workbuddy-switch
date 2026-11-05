@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""生成托盘图标素材（raw RGBA），供 Windows / Linux 托盘使用。
+"""生成托盘图标素材（raw RGBA），供 macOS / Windows / Linux 托盘使用。
 
 为什么需要预生成：
-    Windows / Linux 没有 macOS 的「模板图标」语义，托盘必须自带配色素材；
-    而 Tauri 侧为不引入 PNG 解码依赖（`image-png` feature），改为直接嵌入 raw RGBA，
+    Tauri 侧为不引入 PNG 解码依赖（`image-png` feature），改为直接嵌入 raw RGBA，
     因此需要把源图标预解码并下采样成固定尺寸的 `.rgba` 文件随仓库提交。
 
 用法：
+    swift scripts/generate-tray-template.swift           # 生成可复现的模板 PNG 源图
     python scripts/gen-tray-icon.py                      # 彩色素材（默认 32×32）
     python scripts/gen-tray-icon.py --size 64            # 指定尺寸
     python scripts/gen-tray-icon.py --mono black         # 单色黑猫（浅色任务栏用）
     python scripts/gen-tray-icon.py --mono white         # 单色白猫（深色任务栏用）
+    python scripts/gen-tray-icon.py --mono white --size 36 --out src-tauri/icons/tray-icon-template.rgba
 
 要点：
     * 彩色源图必须**含透明通道**（透明底）。满幅不透明方图会在深色任务栏下显示为白底方块。
     * 下采样使用**预乘 alpha 的面积平均**，避免出现白边 / 黑边。
-    * 单色素材取自 `icons/tray-icon-template.png`（与 macOS 模板同一份猫形），
+    * 单色素材取自 `icons/tray-icon-template.png`（由 Swift 矢量路径脚本生成），
       只对 alpha 做面积平均、RGB 固定为黑白，不携带任何彩色边缘。
 """
 import argparse
@@ -28,7 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 # 单色素材的墨色：黑猫用在浅色任务栏，白猫用在深色任务栏。
 MONO_RGB = {"black": (17, 17, 19), "white": (255, 255, 255)}
 MONO_TEMPLATE = "src-tauri/icons/tray-icon-template.png"
-COLOR_SRC = "public/icon-transparent.png"
+COLOR_SRC = "src-tauri/icons/account-switch/icon-source-macos-rounded-20261031.png"
 COLOR_OUT = "src-tauri/icons/tray-icon-color.rgba"
 
 

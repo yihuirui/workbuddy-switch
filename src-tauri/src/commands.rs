@@ -67,12 +67,12 @@ fn build_app_status(variant: WbVariant) -> AppStatus {
 ///
 /// 返回全部档位的账号；每行 meta 自带 `variant`，由前端按当前档位过滤。
 #[tauri::command]
-pub fn get_accounts() -> Value {
-    let metas: Vec<Value> = account::load_accounts()
+pub fn get_accounts() -> Result<Value, String> {
+    let metas: Vec<Value> = account::load_accounts_checked()?
         .iter()
         .map(account::account_meta)
         .collect();
-    json!({ "accounts": metas })
+    Ok(json!({ "accounts": metas }))
 }
 
 /// GET /api/codebuddy-cli/status —— CodeBuddy CLI helper 轮换状态（不含 token）。
@@ -1210,6 +1210,9 @@ pub fn get_rotate_logs() -> Value {
 pub async fn refresh_account_token(account_id: String) -> Result<Value, String> {
     let acc = account::find_account(&account_id).ok_or("账号不存在")?;
     let fresh = refresh::refresh_account_token(acc).await;
+    if let Some(error) = fresh.get("refresh_error").and_then(Value::as_str) {
+        return Err(error.into());
+    }
     Ok(account::account_meta(&fresh))
 }
 
@@ -1465,4 +1468,12 @@ pub async fn list_notifications() -> Result<Value, String> {
 #[tauri::command]
 pub async fn clear_notifications() -> Result<(), String> {
     notifications::clear()
+}
+
+#[tauri::command]
+pub fn restore_accounts_backup() -> Result<(), String> {
+    if crate::is_screenshot_demo() {
+        return Err("演示模式不可恢复".into());
+    }
+    account::restore_last_good()
 }

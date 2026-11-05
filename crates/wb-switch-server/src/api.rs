@@ -122,10 +122,6 @@ pub fn router() -> Router {
         .route("/api/oauth/status", post(api_oauth_status))
         .route("/api/import-local", post(api_import_local))
         .route("/api/export-accounts", post(api_export_accounts))
-        .route(
-            "/api/export-accounts-to-path",
-            post(api_export_accounts_to_path),
-        )
         .route("/api/import/preview", post(api_preview_import))
         .route("/api/import", post(api_import))
         .route("/api/switch", post(api_switch))
@@ -285,8 +281,12 @@ async fn api_status(RawQuery(query): RawQuery) -> Response {
 /// GET /api/accounts —— 返回全部档位的账号，`current` 取请求档位的登录态。
 async fn api_accounts(RawQuery(query): RawQuery) -> Response {
     let variant = query_variant(query.as_deref());
+    let accounts = match account::load_accounts_checked() {
+        Ok(accounts) => accounts,
+        Err(error) => return json_err(error, StatusCode::INTERNAL_SERVER_ERROR),
+    };
     json_ok(json!({
-        "accounts": account::load_accounts()
+        "accounts": accounts
             .iter()
             .map(account::account_meta)
             .collect::<Vec<_>>(),
@@ -710,27 +710,6 @@ async fn api_export_accounts(Json(body): Json<Value>) -> Response {
         .unwrap_or_default();
     match export_import::export_accounts(&ids) {
         Ok(records) => json_ok(json!({ "ok": true, "accounts": records })),
-        Err(e) => json_err(e, StatusCode::BAD_REQUEST),
-    }
-}
-
-async fn api_export_accounts_to_path(Json(body): Json<Value>) -> Response {
-    let ids: Vec<String> = body
-        .get("accountIds")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let path = body
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    match export_import::export_accounts_to_path(&ids, &path) {
-        Ok(path) => json_ok(json!({ "ok": true, "path": path })),
         Err(e) => json_err(e, StatusCode::BAD_REQUEST),
     }
 }

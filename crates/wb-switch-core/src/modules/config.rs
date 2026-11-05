@@ -67,7 +67,7 @@ pub fn home_dir() -> PathBuf {
 }
 
 pub fn store_dir() -> PathBuf {
-    home_dir().join(".wb-switch")
+    home_dir().join(".wbcli-switch-proxyapi")
 }
 
 pub fn accounts_file() -> PathBuf {
@@ -907,23 +907,62 @@ pub fn utc_iso() -> String {
 // ---------------------------------------------------------------------------
 
 /// 原子写文件（临时文件 + rename），对照 Python atomic_write。
-pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let tmp = path.with_file_name(format!("{file_name}.tmp-{}", uuid::Uuid::new_v4().simple()));
-    if let Err(e) = std::fs::write(&tmp, content) {
-        eprintln!("[atomic] write tmp FAILED: {e}");
-        return Err(e);
+pub fn private_directory(path: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("拒绝符号链接数据目录"));
     }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        eprintln!("[atomic] rename FAILED: {e}");
-        // rename 失败时清理临时文件，避免在目标目录残留 `<name>.tmp-*`。
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+pub fn private_file(path: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other("拒绝非普通数据文件"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("拒绝覆盖符号链接文件"));
+    }
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!("{file_name}.tmp-{}", uuid::Uuid::new_v4().simple()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        let mut file = options.open(&tmp)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -966,10 +1005,24 @@ pub fn is_route_missing(response: &Value) -> bool {
 }
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static QUICK_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// 默认单请求超时。
+const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
+
+/// 签到等轻量接口的单请求超时。
+///
+/// 签到一轮最多串行发 4 个请求（惰性刷新 → 状态 → 回退状态 → 提交）。沿用 30 秒
+/// 会把一次网络抖动放大成两分钟以上的转圈；10 秒足够覆盖正常往返。
+pub const CHECKIN_HTTP_TIMEOUT_SECS: u64 = 10;
 
 fn http_client_builder() -> reqwest::ClientBuilder {
+    http_client_builder_with_timeout(DEFAULT_HTTP_TIMEOUT_SECS)
+}
+
+fn http_client_builder_with_timeout(secs: u64) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(secs))
         .user_agent(DEFAULT_HTTP_USER_AGENT)
 }
 
@@ -978,6 +1031,15 @@ fn http_client() -> &'static reqwest::Client {
         http_client_builder()
             .build()
             .expect("failed to build reqwest client")
+    })
+}
+
+/// 短超时客户端：签到链路专用，避免单次抖动把整轮签到拖成界面转圈。
+pub fn quick_http_client() -> &'static reqwest::Client {
+    QUICK_HTTP_CLIENT.get_or_init(|| {
+        http_client_builder_with_timeout(CHECKIN_HTTP_TIMEOUT_SECS)
+            .build()
+            .expect("failed to build quick reqwest client")
     })
 }
 
@@ -1018,6 +1080,17 @@ pub async fn http_request_with_proxy(
         },
         None => http_client().clone(),
     };
+    send_json(client, url, method, body, headers).await
+}
+
+/// 用已构建的客户端发一次请求并解析 JSON（超时策略由调用方选的客户端决定）。
+async fn send_json(
+    client: reqwest::Client,
+    url: &str,
+    method: reqwest::Method,
+    body: Option<Value>,
+    headers: Option<&HashMap<String, String>>,
+) -> Value {
     let mut req = client.request(method, url);
     req = req.header("Content-Type", "application/json");
     if let Some(h) = headers {
@@ -1045,6 +1118,19 @@ pub async fn http_request_with_proxy(
         }
         Err(e) => json!({"code": -1, "message": e.to_string()}),
     }
+}
+
+/// 短超时版本：语义与 [`http_request`] 完全一致，仅单请求超时更短。
+///
+/// 供签到链路使用——那里每轮串行多个请求，默认 30 秒会把一次失败放大成整轮卡顿。
+pub async fn http_request_quick(
+    url: &str,
+    method: &str,
+    body: Option<Value>,
+    headers: Option<&HashMap<String, String>>,
+) -> Value {
+    let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+    send_json(quick_http_client().clone(), url, method, body, headers).await
 }
 
 /// 非 JSON 错误响应体归一化：网关（openresty / APISIX 等）的 401/5xx 常返回

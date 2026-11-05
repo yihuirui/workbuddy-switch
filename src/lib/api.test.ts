@@ -89,3 +89,18 @@ describe("webui httpCall URL 构造", () => {
     );
   });
 });
+
+
+describe("WebUI 会话保护", () => {
+  it("片段密钥进入请求头并从地址栏清除", async () => {
+    const token = "a".repeat(64);
+    const storage = new Map<string,string>();
+    vi.stubGlobal("sessionStorage", { getItem: (key:string) => storage.get(key) ?? null, setItem: (key:string,value:string) => storage.set(key,value) });
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", { location: { origin: PAGE_ORIGIN, hash: `#wb-session=${token}`, pathname: "/", search: "" }, history: { replaceState } });
+    const fetchMock = stubFetch();
+    await getStatus();
+    expect(fetchMock.mock.calls[0][1]?.headers).toHaveProperty("Authorization", `Bearer ${token}`);
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/");
+  });
+});

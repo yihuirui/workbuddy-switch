@@ -1,0 +1,17 @@
+{
+  "sourceRevision": "3f0cef010e4ad20279500e6b0f18060b6f3f37cc",
+  "goVersion": "go1.26.10",
+  "minimumMacOSVersion": "15.0",
+  "platforms": {
+    "darwin/arm64": {
+      "engineSha256": "339cf209498945a24f2a75937e5af1c1de743759d344deca494e2947703f9dca",
+      "pluginSha256": "70e05b8e5da85ea143afa9a3137fed02f29c1071e36dde14b33c968deba2be2d",
+      "patchSha256": "73b6c1c2c4142be5c6bfa36aebb84423545aebb56ccc670f009432a9e46fc0fa"
+    },
+    "darwin/x86_64": {
+      "engineSha256": "20995a8fd2f3e7b164b06bdb292ce7103809e75d634a80a9ce787e8cd70acb07",
+      "pluginSha256": "bd20ee1fe8810f1dd0d9f9b4c2acbb40054a1dfaac1e3860f2fe11b955ad60b7",
+      "patchSha256": "73b6c1c2c4142be5c6bfa36aebb84423545aebb56ccc670f009432a9e46fc0fa"
+    }
+  }
+}

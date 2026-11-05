@@ -48,13 +48,24 @@ fn truncate_detail(detail: &str) -> &str {
     &detail[..end]
 }
 
+fn redact(text: &str) -> String {
+    use std::sync::OnceLock;
+    static SECRET: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = SECRET.get_or_init(|| regex::Regex::new(r#"(?i)(bearer\s+|(?:access[_-]?token|refresh[_-]?token|api[_-]?key|authorization|password|state)[\s\"']*[:=][\s\"']*)([^\s\"'&,}]+)"#).expect("constant regex"));
+    static BEARER: OnceLock<regex::Regex> = OnceLock::new();
+    let bearer = BEARER
+        .get_or_init(|| regex::Regex::new(r#"(?i)bearer\s+[^\s"'&,}]+"#).expect("constant regex"));
+    let text = bearer.replace_all(text, "Bearer [REDACTED]");
+    pattern.replace_all(&text, "${1}[REDACTED]").into_owned()
+}
+
 /// 组装一条日志记录（字段固定为 6 个）。
 fn build_entry(kind: &str, message: &str, detail: &str, at_ms: i64) -> Value {
     json!({
         "ts": at_ms,
         "kind": normalize_kind(kind),
-        "message": message,
-        "detail": truncate_detail(detail),
+        "message": redact(message),
+        "detail": redact(truncate_detail(detail)),
         "appVersion": crate::modules::update::APP_VERSION,
         "os": std::env::consts::OS,
     })
@@ -279,5 +290,18 @@ mod tests {
 
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    #[test]
+    fn redacts_credentials_and_oauth_state() {
+        let output = super::redact(
+            r#"Authorization: Bearer secret-123 {"refresh_token":"private-456"} https://example.test/?state=private-789"#,
+        );
+        assert!(!output.contains("secret-123"));
+        assert!(!output.contains("private-456"));
+        assert!(!output.contains("private-789"));
     }
 }

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
-import { ArrowUp, Link2, Loader2, MessagesSquare, Play, Settings, Sparkles, User } from "lucide-react";
+import { Link2, MessagesSquare, Play, Plug, Settings, Sparkles, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
+import { ProductBrandName, ProductFooterIdentity } from "@/components/product-identity";
+import ProxyPage from "@/pages/ProxyPage";
 import AccountsPage from "@/pages/AccountsPage";
 import SessionsPage from "@/pages/SessionsPage";
 import CreditStatsPage from "@/pages/CreditStatsPage";
@@ -12,7 +14,6 @@ import TokenStatsPage from "@/pages/TokenStatsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import { StatusDot, AppIconMark } from "@/components/product-marks";
 import { CompanionDemoDialog } from "@/components/companion-demo-dialog";
-import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -25,7 +26,6 @@ import { useSessionsNavEnabled } from "@/lib/nav-prefs";
 import { changeCompanionEnabled, useCompanionEnabled } from "@/lib/use-companion-enabled";
 import { useCreditAutoRefresh } from "@/lib/use-credit-auto-refresh";
 import { useRotateDeferredNotice } from "@/lib/use-rotate-deferred-notice";
-import { useUpdateState } from "@/lib/use-update-state";
 import { useWorkbuddyStatusRefresh } from "@/lib/use-workbuddy-status-refresh";
 import { useAccountsStore } from "@/stores/accounts";
 
@@ -68,7 +68,7 @@ function CompanionFooter() {
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-lg" aria-label="会话悬浮窗" disabled={enabled === null || busy}>
-              <img src={companionTrayIcon} alt="" className={cn("size-6 object-contain transition-all", !enabled && "grayscale opacity-55")} />
+              <img src={companionTrayIcon} alt="" className={cn("size-6 object-contain transition-[filter,opacity]", !enabled && "grayscale opacity-55")} />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -149,72 +149,20 @@ function CompanionDemoFooter() {
   );
 }
 
-function UpdateCenter({ running }: { running: boolean | undefined }) {
-  const version = useAccountsStore((s) => s.status?.version);
-  const snapshot = useUpdateState();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const showCompanion = api.isDesktop() && !demoModeEnabled;
+export function UpdateCenter({ running }: { running: boolean | undefined }) {
+  const showCompanion = false;
   // 演示模式只提供只读演示浮层，不渲染正式版的悬浮窗开关。
   const showCompanionDemo = demoModeEnabled;
 
-  // 阶段由 Rust 更新服务经 `update-state` 推送（托盘同源），前端不再轮询检查。
-  // 已知目标版本时，检查中 / 失败也要保留入口，与托盘「升级到 vX / 点击重试」对齐。
-  const hasKnownTarget = Boolean(snapshot.latest);
-  const hasUpdate =
-    snapshot.phase === "available" ||
-    snapshot.phase === "downloading" ||
-    snapshot.phase === "readyToRestart" ||
-    (hasKnownTarget && (snapshot.phase === "error" || snapshot.phase === "checking"));
-  const updateHint =
-    snapshot.phase === "downloading"
-      ? snapshot.percent === null
-        ? "正在下载更新…"
-        : `正在下载更新 ${snapshot.percent}%`
-      : snapshot.phase === "readyToRestart"
-        ? "重启以完成升级"
-        : snapshot.phase === "error"
-          ? "更新失败，点击重试"
-          : snapshot.phase === "checking"
-            ? "正在检查…"
-            : "更新";
-
   return (
-    <>
-      <section className="mt-auto border-t border-sidebar-border px-2 pt-3 text-xs">
+    <section className="mt-auto border-t border-sidebar-border px-2 pt-3 text-xs">
         <div className="flex items-center gap-2 text-[13px] text-sidebar-foreground">
           {showCompanion ? <CompanionFooter /> : showCompanionDemo ? <CompanionDemoFooter /> : (
-            <>
-              <StatusDot on={Boolean(running)} />
-              <span className="min-w-0 flex-1 truncate">WorkBuddy</span>
-            </>
+            <StatusDot on={Boolean(running)} />
           )}
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            <span className="text-sidebar-foreground/50">v{version || "?"}</span>
-            {hasUpdate && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon"
-                    className="size-5 rounded-full p-0"
-                    aria-label={updateHint}
-                    onClick={() => setDialogOpen(true)}
-                  >
-                    {snapshot.phase === "downloading" || snapshot.phase === "checking" ? (
-                      <Loader2 className="size-3 animate-spin" strokeWidth={2.5} aria-hidden="true" />
-                    ) : (
-                      <ArrowUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">{updateHint}</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
+          <ProductFooterIdentity />
         </div>
       </section>
-      <UpdateInstallDialog open={dialogOpen} onOpenChange={setDialogOpen} />
-    </>
   );
 }
 
@@ -245,15 +193,7 @@ function Layout() {
         <div className="flex items-center gap-2.5 px-1 pb-5">
           <AppIconMark size={36} className="drop-shadow-sm" />
           <div className="min-w-0">
-            <div
-              className="truncate text-[15px] leading-5 tracking-[-0.02em] text-sidebar-foreground/90"
-              style={{
-                fontFamily: '"Bricolage Grotesque Variable", "SF Pro Display", ui-sans-serif, sans-serif',
-                fontWeight: 640,
-              }}
-            >
-              WorkBuddy Switch
-            </div>
+            <ProductBrandName />
             {demoModeEnabled && (
               <Badge variant="secondary" className="mt-1 h-5 border-0 px-1.5 text-[10px] text-sidebar-foreground/60 shadow-none">
                 演示模式
@@ -293,7 +233,8 @@ function Layout() {
               关联会话
             </NavLink>
           )}
-          <NavLink to="/token-stats" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><MessagesSquare className="size-4" />Token 统计</NavLink>
+          <NavLink to="/proxy" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><Plug className="size-4" />Proxy API</NavLink>
+          <NavLink to="/token-stats" className={({ isActive }) => cn("flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring/50", isActive ? "bg-foreground/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground")}><MessagesSquare className="size-4" />Token 统计</NavLink>
           <NavLink
             to="/credit-stats"
             className={({ isActive }) =>
@@ -349,6 +290,7 @@ export default function App() {
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/credit-stats" element={<CreditStatsPage />} />
             <Route path="/token-stats" element={<TokenStatsPage />} />
+            <Route path="/proxy" element={<ProxyPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

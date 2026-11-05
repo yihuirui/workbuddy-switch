@@ -8,6 +8,7 @@
 //! ```
 
 mod api;
+mod security;
 
 use serde_json::json;
 
@@ -147,7 +148,19 @@ async fn serve(args: &[String]) {
         }
     }
 
-    let app = api::router();
+    account::harden_storage().expect("无法保护账号存储权限");
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let app = api::router().layer(axum::middleware::from_fn_with_state(
+        security::Access {
+            token: std::sync::Arc::new(token.clone()),
+            port,
+        },
+        security::protect,
+    ));
     let addr = format!("127.0.0.1:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
@@ -157,13 +170,21 @@ async fn serve(args: &[String]) {
         }
     };
 
+    config::atomic_write(
+        &config::store_dir().join(format!("webui-session-{port}")),
+        &token,
+    )
+    .expect("无法写入私有会话文件");
+
     println!("workbuddy-switch v{}", update::APP_VERSION);
     println!("webui: http://{addr}");
-    println!("按 Ctrl+C 停止服务。");
+    println!(
+        "按 Ctrl+C 停止服务。无浏览器模式的会话密钥保存在私有数据目录 webui-session-{port} 中。"
+    );
 
     let no_open = args.iter().any(|a| a == "--no-open");
     if !no_open {
-        open_browser(&addr);
+        open_browser(&format!("{addr}/#wb-session={token}"));
     }
 
     spawn_background_loops();

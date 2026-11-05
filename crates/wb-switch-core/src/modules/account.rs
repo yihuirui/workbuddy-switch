@@ -32,41 +32,130 @@ fn has_unexpired_plain_token(acc: &Value) -> bool {
     }
 }
 
-fn load_accounts_from_path(path: &Path) -> Vec<Value> {
-    if let Ok(text) = std::fs::read_to_string(path) {
-        if let Ok(Value::Array(accounts)) = serde_json::from_str::<Value>(&text) {
-            return accounts;
-        }
+fn read_accounts_checked(path: &Path) -> std::io::Result<Vec<Value>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => crate::modules::config::private_file(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => return Err(error),
     }
-    vec![]
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(_) => {
+            return Err(std::io::Error::other(
+                "无法读取账号库，已禁止覆盖；请检查权限或恢复备份",
+            ))
+        }
+    };
+    let accounts: Vec<Value> = serde_json::from_str(&text).map_err(|_| {
+        std::io::Error::other("账号库损坏，已禁止覆盖；请从 accounts.last-good.json 恢复")
+    })?;
+    if accounts.iter().any(|a| !a.is_object()) {
+        return Err(std::io::Error::other("账号库记录无效，已禁止覆盖"));
+    }
+    Ok(accounts)
+}
+
+fn load_accounts_from_path(path: &Path) -> Vec<Value> {
+    // Legacy read-only consumers return no accounts on failure; all writes and the UI
+    // use the checked path, so a read failure can never become an empty overwrite.
+    read_accounts_checked(path).unwrap_or_default()
+}
+
+fn store_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    use fs2::FileExt;
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("账号目录无效"))?;
+    crate::modules::config::private_directory(parent)?;
+    let lock_path = path.with_extension("lock");
+    if std::fs::symlink_metadata(&lock_path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("拒绝符号链接锁文件"));
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts.open(&lock_path)?;
+    file.lock_exclusive()?;
+    crate::modules::config::private_file(&lock_path)?;
+    Ok(file)
+}
+
+fn save_locked(path: &Path, accounts: &[Value]) -> std::io::Result<()> {
+    // Validate the existing file before either backup or replacement.
+    let previous = read_accounts_checked(path)?;
+    if path.exists() {
+        atomic_write(
+            &path.with_file_name("accounts.last-good.json"),
+            &serde_json::to_string_pretty(&previous)?,
+        )?;
+    }
+    atomic_write(path, &serde_json::to_string_pretty(accounts)?)
 }
 
 fn save_accounts_to_path(path: &Path, accounts: &[Value]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let _lock = store_lock(path)?;
+    save_locked(path, accounts)
+}
+
+pub fn mutate_accounts<T>(
+    f: impl FnOnce(&mut Vec<Value>) -> Result<T, String>,
+) -> Result<T, String> {
+    let path = accounts_file();
+    let _lock = store_lock(&path).map_err(|e| e.to_string())?;
+    let mut accounts = read_accounts_checked(&path).map_err(|e| e.to_string())?;
+    let result = f(&mut accounts)?;
+    save_locked(&path, &accounts).map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+pub fn load_accounts_checked() -> Result<Vec<Value>, String> {
+    read_accounts_checked(&accounts_file()).map_err(|e| e.to_string())
+}
+
+pub fn harden_storage() -> std::io::Result<()> {
+    let dir = crate::modules::config::store_dir();
+    crate::modules::config::private_directory(&dir)?;
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            crate::modules::config::private_file(&entry.path())?;
+        }
     }
-    let content = serde_json::to_string_pretty(accounts).unwrap_or_default();
-    atomic_write(path, &content)
+    Ok(())
 }
 
 fn find_account_in(accounts: &[Value], account_id: &str) -> Option<Value> {
-    accounts
+    if let Some(a) = accounts
         .iter()
-        .find(|account| {
-            account.get("id").and_then(Value::as_str) == Some(account_id)
-                || account.get("uid").and_then(Value::as_str) == Some(account_id)
-        })
-        .cloned()
+        .find(|a| a.get("id").and_then(Value::as_str) == Some(account_id))
+    {
+        return Some(a.clone());
+    }
+    let mut matches = accounts
+        .iter()
+        .filter(|a| a.get("uid").and_then(Value::as_str) == Some(account_id));
+    let first = matches.next()?.clone();
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(first)
+    }
 }
 
 fn delete_account_from_path(path: &Path, account_id: &str) -> Result<(), String> {
-    let mut accounts = load_accounts_from_path(path);
+    let _lock = store_lock(path).map_err(|e| e.to_string())?;
+    let mut accounts = read_accounts_checked(path).map_err(|e| e.to_string())?;
     let before = accounts.len();
-    accounts.retain(|account| account.get("id").and_then(Value::as_str) != Some(account_id));
-    if accounts.len() == before {
-        return Err("账号不存在".to_string());
+    accounts.retain(|a| a.get("id").and_then(Value::as_str) != Some(account_id));
+    if before == accounts.len() {
+        return Err("账号不存在".into());
     }
-    save_accounts_to_path(path, &accounts).map_err(|error| error.to_string())
+    save_locked(path, &accounts).map_err(|e| e.to_string())
 }
 
 /// 读取账号库；文件缺失或损坏返回空列表。
@@ -142,6 +231,8 @@ pub fn account_meta(acc: &Value) -> Value {
         "createdAt": display_value(acc, "createdAt"),
         "needsRelogin": acc.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true),
         "needsReloginReason": display_value(acc, "needs_relogin_reason"),
+        "refreshError": display_value(acc, "refresh_error"),
+        "refreshRetryAt": acc.get("refresh_retry_at"),
         // 企业版标记（issue #167）：读取时判定，供前端展示「企业版」徽标，历史数据零迁移。
         "isEnterprise": is_enterprise_account(acc),
         // 档位随元数据下发，供宿主按档位过滤列表（缺省国内版，历史数据零迁移）。
@@ -232,9 +323,23 @@ fn identity_email(account: &Value) -> Option<String> {
 /// 非空 UID 始终优先；仅当新账号没有 UID 时，才使用真实邮箱兜底。
 /// 命中已有身份时保留本地 id，避免调用方持有的账号引用失效。
 pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value) -> Value {
+    // Legacy updates may omit region; only an established local id may supply it.
+    if get_str(&collected, "variant").is_none() && get_str(&collected, "domain").is_none() {
+        if let Some(id) = get_str(&collected, "id") {
+            if let Some(existing) = accounts
+                .iter()
+                .find(|a| get_str(a, "id").as_deref() == Some(&id))
+            {
+                collected["variant"] = json!(variant_of(existing).as_str());
+            }
+        }
+    }
     let collected_uid = get_str(&collected, "uid");
     let collected_email = identity_email(&collected);
     let matches_identity = |existing: &Value| {
+        if variant_of(existing) != variant_of(&collected) {
+            return false;
+        }
         if let Some(uid) = collected_uid.as_deref() {
             return get_str(existing, "uid").as_deref() == Some(uid);
         }
@@ -318,17 +423,17 @@ pub fn upsert_collected_account(accounts: &mut Vec<Value>, mut collected: Value)
 
 /// 使用统一身份规则保存采集到的账号。
 pub fn save_collected_account(collected: Value) -> std::io::Result<Value> {
-    let mut accounts = load_accounts();
-    let saved = upsert_collected_account(&mut accounts, collected);
-    save_accounts(&accounts)?;
-    Ok(saved)
+    mutate_accounts(|accounts| Ok(upsert_collected_account(accounts, collected)))
+        .map_err(std::io::Error::other)
 }
 
 /// 按 id 覆盖；id 缺失或未命中时按 uid 回退覆盖，仍未命中则补 id 追加。
 pub fn upsert_account(updated: &Value) -> std::io::Result<()> {
-    let mut accounts = load_accounts();
-    upsert_account_in(&mut accounts, updated);
-    save_accounts(&accounts)
+    mutate_accounts(|accounts| {
+        upsert_account_in(accounts, updated);
+        Ok(())
+    })
+    .map_err(std::io::Error::other)
 }
 
 /// 备注长度上限（字符数），与前端输入框 maxLength 保持一致。
@@ -339,10 +444,9 @@ const NOTE_MAX_CHARS: usize = 24;
 /// 只触碰本地展示字段，不修改 uid / token / profile_raw 等官方数据。
 /// 先整体校验再写入，避免部分更新。返回更新后的 `account_meta`。
 pub fn update_account_display(account_id: &str, patch: &Value) -> Result<Value, String> {
-    let mut accounts = load_accounts();
-    let updated = update_account_display_in(&mut accounts, account_id, patch)?;
-    save_accounts(&accounts).map_err(|error| error.to_string())?;
-    Ok(account_meta(&updated))
+    mutate_accounts(|accounts| {
+        update_account_display_in(accounts, account_id, patch).map(|updated| account_meta(&updated))
+    })
 }
 
 /// 更新账号展示字段的内存实现（不落盘，便于单测）。
@@ -414,9 +518,10 @@ fn upsert_account_in(accounts: &mut Vec<Value>, updated: &Value) {
         .is_none()
         .then(|| {
             uid.as_deref().and_then(|uid| {
-                accounts
-                    .iter()
-                    .position(|a| get_str(a, "uid").as_deref() == Some(uid))
+                accounts.iter().position(|a| {
+                    get_str(a, "uid").as_deref() == Some(uid)
+                        && variant_of(a) == variant_of(updated)
+                })
             })
         })
         .flatten();
@@ -1183,3 +1288,26 @@ mod tests {
 
 // 手动添加账号（token 方式）已随 UI 入口「手动添加」一并下线；
 // `identity_email` 中的 "手动添加" 占位过滤保留，用于兼容历史手动添加的旧账号。
+
+/// Explicit recovery only: keep a private copy of the damaged file and never
+/// substitute a backup silently during normal startup.
+pub fn restore_last_good() -> Result<(), String> {
+    let path = accounts_file();
+    let _lock = store_lock(&path).map_err(|e| e.to_string())?;
+    if read_accounts_checked(&path).is_ok() {
+        return Err("账号库当前可读，未执行恢复".into());
+    }
+    let backup = path.with_file_name("accounts.last-good.json");
+    if !backup.is_file() {
+        return Err("没有可用的账号备份".into());
+    }
+    let recovered = read_accounts_checked(&backup).map_err(|e| e.to_string())?;
+    let damaged = path.with_file_name(format!("accounts.corrupt-{}.json", uuid::Uuid::new_v4()));
+    std::fs::copy(&path, &damaged).map_err(|e| e.to_string())?;
+    crate::modules::config::private_file(&damaged).map_err(|e| e.to_string())?;
+    atomic_write(
+        &path,
+        &serde_json::to_string_pretty(&recovered).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}

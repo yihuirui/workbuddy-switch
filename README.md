@@ -1,154 +1,65 @@
-# workbuddy-switch
+# Workbuddy-Switch2
 
-WorkBuddy、CodeBuddy IDE、CodeBuddy CLI 与 VS Code CodeBuddy 插件账号切换桌面 App（Tauri），四者均支持国内版 / 国际版，并提供积分到期与 Token 用量监控。
+Workbuddy-Switch2 is a desktop app for managing WorkBuddy and CodeBuddy accounts and a local model API proxy.
 
-<p align="center">
-  <img src="public/icon-transparent.png" alt="WorkBuddy Switch 图标" width="128" />
-</p>
+## Public source status
 
-多账号共享登录态，一键切换 WorkBuddy 登录账号。**会话复制**：把当前账号的会话以新 id 复制给目标账号，源账号数据不受影响，云端归属目标账号。**关联会话**：复制过的会话会自动建立跨账号关联，集中查看各账号副本状态，并把新增内容同步过去。
+This is the initial public source snapshot, based on the Workbuddy-Switch2 0.1.5 code. No prebuilt application binaries are published for this public fork yet. The build instructions below target macOS 15.0 or newer on Apple silicon (ARM64) and Intel (x86_64); Windows and Linux packages are not provided by this preview. The source snapshot has not been validated with real account sign-in, real model inference, streaming requests, quota use, or check-in. Builds are not Developer ID signed or Apple-notarized.
 
-**在线演示**：[打开 GitHub Pages 演示](https://changexbc.github.io/workbuddy-switch/)（只读演示；账号、积分与请求记录均为虚构数据，所有业务操作均已禁用，另含只读的会话悬浮栏演示）
+## Install and use
 
-## 快速开始
+There is no public installer or downloadable app archive yet. To try the app, build it from this source using the instructions below. Each architecture's app bundles its matching proxy engine and WorkBuddy provider plugin. The app uses bundle identifier `com.wbcli.switch.proxyapi` and data directory `~/.wbcli-switch-proxyapi/`; do not delete that directory or change `WB_SWITCH_HOME` unless you intend to use a separate store.
 
-前往 [GitHub Releases](https://github.com/changexbc/workbuddy-switch/releases/latest) 下载对应平台的安装包：
+After building, add only accounts you are authorized to use. On the Proxy API page, select accounts and explicitly start the local service. It listens on `127.0.0.1:8317`; its management API is disabled. The local API key is shown in the app. A model connectivity test sends a real request and may use account quota; it is not run automatically.
 
-| 平台 | 安装包 | 安装方式 |
-| --- | --- | --- |
-| macOS Apple Silicon（M 系列，arm64） | `workbuddy-switch_<版本>_aarch64.dmg` | 打开 DMG，将 `workbuddy-switch.app` 拖入「应用程序」 |
-| macOS Intel（x86_64） | `workbuddy-switch_<版本>_x86_64.dmg` | 打开 DMG，将 `workbuddy-switch.app` 拖入「应用程序」 |
-| Windows x64 | `workbuddy-switch_<版本>_x64-setup.exe` | 运行安装程序并按提示完成安装 |
-| Linux x64 | `workbuddy-switch_<版本>_amd64.deb` / `workbuddy-switch_<版本>_amd64.AppImage` | Debian/Ubuntu 安装 `.deb`；其他发行版可给 AppImage 添加执行权限后直接运行 |
+Automatic in-app updates are disabled. Until this public project publishes its own release, updates require rebuilding from source. The account data directory remains separate from the app bundle.
 
-macOS 首次启动若提示无法验证开发者，先在 Finder 中按住 Control 点击应用并选择「打开」，或前往「系统设置 → 隐私与安全性」选择「仍要打开」。仅当安装包来自上述官方 Releases、且系统仍提示「已损坏」时，再执行：
+## Build from source
 
-```bash
-xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
-```
+Requirements: macOS 15.0 or newer with Xcode Command Line Tools, Node.js 24.18.1, Rust 1.99.1, and Go 1.26.10. Choose the matching architecture in the build guide: [Apple silicon](docs/APPLE_SILICON_BUILD.md) or [Intel Mac](docs/INTEL_MAC_BUILD.md).
 
-应用能启动但切换账号时提示无权限，请参阅下方 [macOS 权限说明](#macos-权限说明)。
+Start in a fresh source checkout or a new directory created from the public source export. Do not prepare the runtime in an existing working copy that contains ignored `runtime/` files. The fetcher leaves existing files in place and refuses mismatched architectures; every Tauri bundle build also fails unless the selected engine and plugin match the selected architecture and `runtime.manifest.json`.
 
-另有 npm / webui 版本可在浏览器中使用，见文末 [npm / webui 版本](#npm--webui-版本)。
-
-## 功能
-
-| 模块 | 说明 |
-| --- | --- |
-| 账号管理 | OAuth 扫码登录、导入导出账号、删除账号 |
-| 账号切换 | 一键切换 WorkBuddy 登录账号，切换过程实时显示进度 |
-| 会话复制 | 把当前账号勾选的会话复制给目标账号，源账号数据不受影响 |
-| 关联会话 | 复制过的会话自动建立跨账号关联；按客户端集中查看同一会话在各账号中的副本状态，支持增量同步、分歧处理与新增 / 解除关联 |
-| 积分到期查询 | 自动查询每个账号的积分剩余量与到期时间；7 天内到期高亮，并按紧迫程度排序、标注「建议优先使用」 |
-| 积分统计 | 汇总官方请求用量：总览、近 30 天趋势、模型分类、账号消耗与请求明细 |
-| Token 统计 | 按来源查看 Token 总览与趋势，含构成占比、活跃热力图、项目/模型 Top 10 与会话排行 |
-| CodeBuddy CLI | 与 WorkBuddy 复用同一账号库，默认账号独立；切换后立即生效，无需重启 CLI |
-| CodeBuddy IDE | 支持切换 CodeBuddy IDE 桌面客户端账号，并可在弹窗中勾选复制会话，与 CodeBuddy CLI 相互独立 |
-| VS Code CodeBuddy 插件 | 支持切换 VS Code 内的 CodeBuddy 插件账号；VS Code 运行时可自动关闭并在写入后重新打开 |
-| JetBrains IDE 插件 | 支持切换 IntelliJ IDEA / PyCharm 内的 CodeBuddy 插件账号，一次切换写入所有装了插件的 IDE；IDE 运行时可自动关闭并在写入后重新打开 |
-| 插件会话复制 | 切换插件账号时，可把当前插件账号的会话复制给目标账号（加法，源账号不变） |
-| 自动轮换 | 后台把积分最紧迫的账号设为 CodeBuddy CLI 后续启动账号；检测到 CLI 会话运行时会跳过 |
-| 自动更新 | 从 GitHub Releases 检查新版本，整包更新经签名校验 |
-| 会话悬浮窗 | 桌面版内置 Agent Companion 悬浮栏，在桌面集中显示 Codex / WorkBuddy / CodeBuddy / Codeg 会话的运行中 / 待确认 / 已完成状态；悬停查看详情，支持跳转时点击回到原会话，托盘可临时隐藏 |
-| 权限检测 | macOS 授权引导（App 管理 / 完全磁盘访问拖拽授权 + 自动检测） |
-
-## 支持的工具
-
-| 工具 | 账号切换 | 会话复制 | 自动关闭重开 | 自动轮换 | 悬浮窗监听 |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| WorkBuddy | ✅ | ✅ | ✅ | — | ✅ |
-| CodeBuddy IDE | ✅ | ✅ | ✅ | — | ✅ |
-| CodeBuddy CLI | ✅ | — | — | ✅ | — |
-| VS Code CodeBuddy 插件 | ✅ | ✅ | ✅ | — | ✅ |
-| JetBrains IDE 插件（IDEA / PyCharm） | ✅ | — | ✅ | — | — |
-
-✅ 表示支持，— 表示不支持。设置 →「支持工具」可按客户端逐个开启 / 关闭入口；关闭后该端入口与状态轮询一并隐藏，不影响账号库与其它端；JetBrains 端默认关闭，可在设置中随时打开。
-
-CodeBuddy CLI 切换时会先关闭正在运行的 CLI，当前会话会中断且不会自动重开；其余各端可在客户端运行时自动完成切换。
-
-### 会话悬浮窗（Agent Companion）
-
-桌面版内置 [Agent Companion](https://github.com/changexbc/agent-companion) 悬浮栏：把各 AI Agent 的任务状态集中到桌面，一眼看出谁还在运行、谁需要你确认，支持跳转时点击即可回到原会话；悬浮栏可拖动调整位置，托盘可随时显示 / 隐藏。
-
-| 监听来源 | 跳转到指定会话 | 点击后的行为 |
-| --- | :---: | --- |
-| Codex（Desktop / CLI） | ✅ | 打开 Codex Desktop 中的指定任务 |
-| WorkBuddy（国内版 / 国际版） | ✅ | 打开对应版本中的指定对话 |
-| CodeBuddy IDE（国内版 / 国际版） | — | 有工程路径时打开工程，否则只唤起 CodeBuddy |
-| CodeBuddy VS Code 插件 | — | 尝试打开会话所属的 VS Code 工程，无法确定时只唤起 VS Code |
-| Codeg | ✅ | 打开 Codeg 中的指定聊天会话 |
-
-各来源都会显示运行中 / 待确认 / 已完成状态；CodeBuddy CLI 与 JetBrains 插件不在监听范围内。开启方式：左下角悬浮窗图标，或设置 → Agent Companion；首次使用在「悬浮窗设置」中完成接入（依赖对应客户端的 Hooks / Webhook），监听来源与外观样式也在那里调整。
-
-网页演示里的悬浮栏：一个已完成的 Codex 会话与一个失败的 WorkBuddy 会话，各自弹出信息卡（截自[在线演示](https://changexbc.github.io/agent-companion/)，数据为虚构）。
-
-![Agent Companion 悬浮栏演示：已完成与失败两种状态各自弹出信息卡](docs/images/agent-companion-demo-rail.png)
-
-更多说明与独立版见 [Agent Companion 仓库](https://github.com/changexbc/agent-companion) · [在线演示](https://changexbc.github.io/agent-companion/)
-
-## 使用
-
-1. **添加与导出账号**：账号页 →「OAuth 扫码登录」「导入备份」；「导出」可将勾选账号备份为 JSON
-2. **切换账号与账号信息**：账号卡片 →「切换」，可勾选复制当前会话；「账号信息」可给账号添加备注，并选择卡片上显示账号名 / 手机号 / 备注
-3. **查看积分与统计**：账号页自动查询各账号积分到期情况，点「刷新积分」手动更新；侧栏进入「积分统计」「Token 统计」查看用量明细
-4. **切换各客户端账号**：CodeBuddy CLI、CodeBuddy IDE、VS Code CodeBuddy 插件均可在账号卡片一键切换；CodeBuddy IDE 与 VS Code 插件支持在弹窗中勾选复制当前账号的会话。CodeBuddy IDE 首次使用前需先手动打开并登录一次
-5. **管理关联会话**：侧栏「关联会话」按客户端查看同一会话在各账号中的副本状态，把新增内容增量同步到目标账号、处理内容分歧；「新增关联会话」可把会话复制到新账号并建立关联
-6. **开关各端入口**：设置 →「支持工具」可按客户端逐个开启 / 关闭入口；关闭后该端在账号页隐藏、不再轮询状态，不影响账号库。JetBrains 端默认关闭
-7. **自动轮换**：设置 → CodeBuddy CLI 自动轮换，开启后按积分紧迫程度自动设置默认账号
-8. **更新**：应用会自动检查公开 GitHub Releases；发现新版本后可在左下角直接升级，也可从设置页打开 Release 页面手动下载
-
-## 界面预览
-
-### 管理 WorkBuddy 与 CodeBuddy 账号
-
-账号卡片集中展示登录状态、积分余额和到期资源，临期积分直接标注在对应卡片内，并按紧迫程度优先排列。
-
-![账号管理页面（账号信息已脱敏）](docs/images/accounts-overview.png)
-
-### 关联会话
-
-复制到其他账号的会话会自动建立关联：按客户端（WorkBuddy / CodeBuddy IDE / CodeBuddy 插件）集中展示同一会话在各账号中的副本状态，可把来源账号的新增内容增量同步到目标账号；出现内容分歧时选择要保留的一份，也可把会话复制到新账号并建立关联。
-
-![关联会话页面](docs/images/session-links.png)
-
-打开任一关联组可查看「会话关联图」：同一会话在各账号中的副本以分支图呈现，内容分歧时标出共同旧版与各自的独立更新，选定要保留的一份即可统一到其他账号。
-
-![关联会话详情：内容分歧时的分支图](docs/images/session-links-branches.png)
-
-### 积分统计
-
-积分统计页展示官方请求用量、每日趋势、模型分布、账号消耗和请求明细，数据来源与更新时间会明确显示。
-
-![积分统计页面](docs/images/credit-statistics.png)
-
-### Token 统计
-
-Token 统计页按来源展示 Token 总览与趋势、构成占比、活跃热力图、项目/模型 Top 10 与会话排行。
-
-![Token 统计页面](docs/images/token-statistics.png)
-
-## macOS 权限说明
-
-切换账号需要写入 WorkBuddy 认证文件，macOS 要求授权「App 管理」（或「完全磁盘访问」）：
-
-1. 首次切换报「无权限」时，点「打开系统设置」
-2. 优先在 **App 管理** 里打开 workbuddy-switch 开关；若没有，则去 **完全磁盘访问** 把 workbuddy-switch 拖进带箭头的框
-3. 授权后重启本应用生效；设置页「权限检测」可随时验证
-
-## npm / webui 版本
+The public source export omits prebuilt runtime binaries. Build the pinned runtime for the selected architecture, verify it in an empty account store, then build the app:
 
 ```bash
-npm i -g workbuddy-switch
-workbuddy-switch              # 启动本地服务 + 自动打开浏览器
-workbuddy-switch status       # 终端查看当前账号
+npm ci
+export WB_RUNTIME_ARCH=arm64
+python3 scripts/fetch-proxy-runtime.py
+python3 scripts/build-patched-engine.py
+python3 scripts/update-runtime-manifest.py
+python3 scripts/smoke-proxy-runtime.py
+npm run tauri -- build --target aarch64-apple-darwin --bundles app
 ```
 
-界面与桌面 App 一致，功能覆盖上方全部模块，但不提供会话悬浮窗（桌面版专属）。webui 模式下的 macOS 权限由启动服务的终端进程决定；若终端已授权完全磁盘访问则无需额外操作。
+The runtime downloads are pinned by SHA-256 in `runtime.lock.json`. The patched engine uses the source revision, patch hash, and macOS 15.0 minimum recorded in `docs/runtime-build.json`. Every Tauri bundle build first checks the selected engine/plugin architecture, executable mode, and manifest hashes; the bundle verifier also compares all three Mach-O minimums with the declared macOS minimum.
 
-## 致谢
+The push/PR checks cover frontend tests/build and the `wb-switch-core` and `wb-switch-server` Rust suites. The optional manual/preview-tag workflow prepares the pinned runtime and runs `wb-switch-rust` tests, including the moved-app runtime-path migration regressions, before packaging. It uploads workflow artifacts only; it does not create or publish a GitHub Release.
 
-感谢 [Linux.do](https://linux.do) 社区。
+## Branding update in 0.1.4
 
-## 许可
+The app name and product version now stay consistent in the sidebar title, footer, startup fallback, and settings. WorkBuddy and CodeBuddy labels continue to identify the managed clients.
 
-[MIT](./LICENSE)
+## Sidebar icon update in 0.1.5
+
+The sidebar now uses the same transparent, rounded-corner app icon as the Dock icon, at a size tuned for the compact brand row.
+
+## Interface refinement in 0.1.3
+
+Account status icons now have accessible names, the account action area is quieter, proxy preview explains its example address and disabled actions, and settings descriptions are easier to read. Keyboard focus and reduced-motion loading indicators retain the existing component system.
+
+This refinement follows [Hallmark](https://github.com/Nutlope/hallmark) and [Impeccable](https://github.com/pbakaus/impeccable) design guidance. They are development tools, not bundled runtime dependencies. Seventy frontend tests and the production frontend build passed; the native ARM64 package passed architecture, minimum-system, runtime-hash, signature and archive checks. Synthetic browser previews were reviewed; the packaged app was not launched against a real account store. Automated web checks do not establish WKWebView, VoiceOver or real-account acceptance.
+
+## Data and security
+
+Account data stays in the user's data directory and is not part of the app bundle or public source export. The API key grants access to the local proxy and should be treated as a secret. Keep exported account backups private. See [third-party notices](THIRD_PARTY_NOTICES.md) for component licenses and [SECURITY.md](SECURITY.md) for reporting guidance.
+
+The app is a preview, not a security certification. No real-account or real-inference test is claimed for release 0.1.5. This build validation does not sign into accounts or send model requests.
+
+## Upstream and improvement provenance
+
+This source descends from [`changexbc/workbuddy-switch`](https://github.com/changexbc/workbuddy-switch), using upstream `main` commit `22b318c1f44b335c2222e444abcc2d0f74e160f7` as the baseline. The Switch2 improvements were developed in the `yihuirui/Workbuddy-Switch2` source snapshot at commit `a35a180a137598e1b8600948b5c2b4c843b349d9`.
+
+Switch2 adds the macOS preview packaging and interface refinements, and integrates a local model API proxy using pinned CLIProxyAPI and WorkBuddy provider sources. Integration details and validation limits are in [docs/INTEGRATION.md](docs/INTEGRATION.md). This project is an independent derivative; it is not an official WorkBuddy, Tencent, or CLIProxyAPI release.
+
+The upstream project and this derivative use the MIT License. Keep [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), along with the component license files they reference, in redistributed copies.

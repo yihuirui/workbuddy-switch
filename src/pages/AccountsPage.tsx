@@ -46,6 +46,7 @@ import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
 import { VscodeSwitchAccountDialog } from "@/components/vscode-switch-account-dialog";
 import * as api from "@/lib/api";
+import { checkinBatchFeedback, checkinFeedback, failedCreditRefreshIds } from "@/lib/checkin-feedback";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
 import {
   accountVariant,
@@ -227,6 +228,9 @@ export default function AccountsPage() {
   const [installingCodebuddyCli, setInstallingCodebuddyCli] = useState(false);
   /** 刷新按钮触发的批量签到进行中 */
   const [checkinAllRunning, setCheckinAllRunning] = useState(false);
+  /** 正在执行单账号手动签到的账号；用于禁用重复操作并提供即时状态。 */
+  const [checkinRunningIds, setCheckinRunningIds] = useState<Set<string>>(() => new Set());
+  const checkinRunningIdsRef = useRef(new Set<string>());
   /** 接入/升级 CLI helper 确认框 */
   const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
   /** 切换 CodeBuddy CLI 确认目标（null=关闭） */
@@ -608,26 +612,29 @@ export default function AccountsPage() {
   }
 
   async function onCheckin(a: AccountMeta) {
+    if (checkinRunningIdsRef.current.has(a.id)) return;
+    checkinRunningIdsRef.current.add(a.id);
+    setCheckinRunningIds(new Set(checkinRunningIdsRef.current));
+    const toastId = toast.loading(`正在为${displayName(a)}签到…`);
     try {
       const res = await api.checkin(a.id);
-      const label =
-        res.result === "success"
-          ? "签到成功"
-          : res.result === "already"
-            ? "今天已签到"
-            : "签到失败";
-      const description = `${displayName(a)}${res.error ? `：${res.error}` : ""}`;
-      if (res.result === "error") toast.error(label, { description });
-      else toast.success(label, { description });
+      const name = displayName(a);
+      const feedback = checkinFeedback(res);
+      const details = [res.error, res.message].filter(Boolean).join("；");
+      const description = `${name}${details ? `：${details}` : ""}`;
+      toast[feedback.level](feedback.title, { id: toastId, description });
       // 手动签到已完成状态核验，直接使用回执，避免为已关闭账号再触发展示查询。
-      if (res.result === "success" || res.result === "already") {
+      if (feedback.refreshCredits) {
         setCheckinMap((prev) => ({ ...prev, [a.id]: true }));
       }
       void fetchAll();
       // 签到成功/已签到会带来积分变动，force 刷新该账号积分
-      if (res.result !== "error") void refreshCredits([a.id]);
+      if (feedback.refreshCredits) void refreshCredits([a.id]);
     } catch (e) {
-      toast.error("签到失败", { description: api.asError(e) });
+      toast.error("签到失败", { id: toastId, description: api.asError(e) });
+    } finally {
+      checkinRunningIdsRef.current.delete(a.id);
+      setCheckinRunningIds(new Set(checkinRunningIdsRef.current));
     }
   }
 
@@ -651,57 +658,59 @@ export default function AccountsPage() {
     if (!visibleAccounts.length || refreshingCredits || checkinAllRunning) return;
     setCheckinAllRunning(true);
     const ids = visibleAccounts.map((account) => account.id);
-    let summary = "";
-    let notify = toast.success;
-    let title = "积分到期情况已刷新";
     try {
       if (checkinAvailable) {
+        let entries: NonNullable<Awaited<ReturnType<typeof api.checkinAll>>["accounts"]> = [];
         try {
           const res = await api.checkinAll(variant, true);
-          const entries = res.accounts ?? [];
-          const success = entries.filter((e) => e.result === "success").length;
-          const already = entries.filter((e) => e.result === "already").length;
-          const failed = entries.filter((e) => e.result === "error").length;
-          const inactive = entries.filter((e) => e.inactive === true || e.result === "inactive").length;
-          const skipped = entries.filter((e) => e.result === "skipped" && e.reason === "auto_checkin_disabled").length;
-          const outsideWindow = entries.filter((e) => e.result === "skipped" && e.reason === "outside_checkin_window").length;
-          const parts: string[] = [];
-          if (success > 0) parts.push(`${success} 个签到成功`);
-          if (already > 0) parts.push(`${already} 个已签到`);
-          if (inactive > 0) parts.push(`${inactive} 个未开放签到`);
-          if (failed > 0) parts.push(`${failed} 个失败`);
-          if (skipped > 0) parts.push(`已忽略 ${skipped} 个关闭自动签到的账号`);
-          if (outsideWindow > 0) parts.push(`${outsideWindow} 个未到签到时间段`);
-          summary = res.status === "skipped" && res.reason === "already_running"
-            ? "签到任务正在进行，本次仅刷新积分"
-            : parts.length > 0 ? parts.join("，") : "无账号需要签到";
-          const allFailed = entries.length > 0 && failed === entries.length;
-          const allSkippedOrInactive =
-            res.status === "skipped" ||
-            entries.length === 0 ||
-            (success === 0 && already === 0 && failed === 0);
-          if (allFailed) {
-            // 全部失败：没有成功、已签、未开放或忽略的账号。
-            notify = toast.error;
-            title = "积分已刷新，签到出现错误";
-          } else if (allSkippedOrInactive) {
-            // 全部被跳过或官方未开放签到活动：既不算成功也不算失败，不呈现为绿色成功。
-            notify = toast.info;
-          }
-          // 只重查实际处理过的账号状态；被跳过的账号本次未发请求，状态保持未知。
-          const next = await fetchTodayCheckinMap(entries.filter((e) => e.result !== "skipped").map((e) => e.accountId));
+          entries = res.accounts ?? [];
+          const feedback = checkinBatchFeedback(entries, res.status, res.reason);
+          const title = feedback.level === "error" ? "签到出现错误" : "签到结果";
+          // Show the check-in outcome as soon as the batch completes. Credit and travel
+          // requests below may take longer and must not hide or delay this result.
+          toast[feedback.level](title, { description: feedback.message });
+        } catch (e) {
+          toast.error("签到失败", { description: api.asError(e) });
+        }
+
+        // Refresh status chips in the background after the result toast is already visible.
+        void fetchTodayCheckinMap(
+          entries.filter((entry) => entry.result !== "skipped").map((entry) => entry.accountId),
+        ).then((next) => {
           if (Object.keys(next).length > 0) {
             setCheckinMap((prev) => ({ ...prev, ...next }));
           }
-        } catch (e) {
-          notify = toast.error;
-          title = "积分已刷新，签到出现错误";
-          summary = api.asError(e);
-        }
+        });
       }
-      await refreshCredits(ids);
-      if (autoTravelEnabled) await loadTravelMap(ids);
-      notify(title, { description: summary || undefined });
+
+      const previousCredits = useAccountsStore.getState().creditMap;
+      try {
+        await refreshCredits(ids);
+      } catch (e) {
+        toast.error("积分刷新失败", { description: api.asError(e) });
+        return;
+      }
+
+      const currentAccountsState = useAccountsStore.getState();
+      const failedIds = failedCreditRefreshIds(
+        ids,
+        previousCredits,
+        currentAccountsState.creditMap,
+      );
+      if (failedIds.length > 0) {
+        const details = failedIds.map((id) => {
+          const account = visibleAccounts.find((item) => item.id === id);
+          const error = currentAccountsState.creditMap[id]?.error;
+          return `${account ? displayName(account) : id}${error ? `（${error}）` : ""}`;
+        }).join("；");
+        toast.error("积分刷新失败", { description: details });
+      } else if (!checkinAvailable) {
+        toast.success("积分到期情况已刷新");
+      }
+
+      if (autoTravelEnabled) {
+        void loadTravelMap(ids);
+      }
     } finally {
       setCheckinAllRunning(false);
     }
@@ -833,7 +842,7 @@ export default function AccountsPage() {
           <div className="flex shrink-0 items-center gap-4 pt-1">
             <div className="flex items-center gap-2.5">
 {enabledTools.workbuddy && (
-              <span className="group relative inline-flex cursor-default">
+              <span className="group relative inline-flex cursor-default" role="img" aria-label={`${appName}：${status?.running ? "运行中" : "未运行"}，当前账号：${workbuddyCurrentName}`}>
                 <span
                   className={
                     status?.running
@@ -844,12 +853,12 @@ export default function AccountsPage() {
                   {variant === "ai" ? <WorkBuddyAiMark size={28} /> : <WorkBuddyMark size={28} />}
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  {appName}：{status?.running ? "运行中" : "未运行"} · 当前账号：{workbuddyCurrentName}
+                  {appName}：{status?.running ? "运行中" : "未运行"}，当前账号：{workbuddyCurrentName}
                 </span>
               </span>
             )}
 {enabledTools.codebuddyIde && (
-              <span className="group relative inline-flex cursor-default">
+              <span className="group relative inline-flex cursor-default" role="img" aria-label={`${variantCodebuddyIdeName(variant)}：${codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"}，当前账号：${cnIdeCurrentName}`}>
                 <span
                   className={
                     codebuddyCnIde?.installed
@@ -864,12 +873,12 @@ export default function AccountsPage() {
                   )}
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  {variantCodebuddyIdeName(variant)}：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"} · 当前账号：{cnIdeCurrentName}
+                  {variantCodebuddyIdeName(variant)}：{codebuddyCnIde?.installed ? (codebuddyCnIde.running ? "运行中" : "已接入") : "未接入"}，当前账号：{cnIdeCurrentName}
                 </span>
               </span>
             )}
 {enabledTools.vscodeExt && (
-              <span className="group relative inline-flex cursor-default">
+              <span className="group relative inline-flex cursor-default" role="img" aria-label={`VS Code CodeBuddy 插件：${!vscodeExt?.installed ? "未检测到 VS Code" : !vscodeExt.extensionInstalled ? "未安装插件" : vscodeExt.running ? "运行中" : "已接入"}，当前账号：${vscodeExtCurrentName}`}>
                 <span
                   className={
                     vscodeExt?.installed && vscodeExt?.extensionInstalled
@@ -880,12 +889,12 @@ export default function AccountsPage() {
                   <VscodeExtMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  VS Code CodeBuddy 插件：{!vscodeExt?.installed ? "未检测到 VS Code" : !vscodeExt.extensionInstalled ? "未安装插件" : vscodeExt.running ? "运行中" : "已接入"} · 当前账号：{vscodeExtCurrentName}
+                  VS Code CodeBuddy 插件：{!vscodeExt?.installed ? "未检测到 VS Code" : !vscodeExt.extensionInstalled ? "未安装插件" : vscodeExt.running ? "运行中" : "已接入"}，当前账号：{vscodeExtCurrentName}
                 </span>
               </span>
             )}
 {enabledTools.jetbrains && (
-              <span className="group relative inline-flex cursor-default">
+              <span className="group relative inline-flex cursor-default" role="img" aria-label={`JetBrains IDE 插件：${!jetbrains?.installed ? "未检测到 JetBrains IDE" : !jetbrains.pluginInstalled ? "未安装插件" : jetbrains.running ? "运行中" : "已接入"}，当前账号：${jetbrainsCurrentName}`}>
                 <span
                   className={
                     jetbrains?.installed && jetbrains?.pluginInstalled
@@ -896,12 +905,12 @@ export default function AccountsPage() {
                   <JetbrainsMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  JetBrains IDE 插件：{!jetbrains?.installed ? "未检测到 JetBrains IDE" : !jetbrains.pluginInstalled ? "未安装插件" : jetbrains.running ? "运行中" : "已接入"} · 当前账号：{jetbrainsCurrentName}
+                  JetBrains IDE 插件：{!jetbrains?.installed ? "未检测到 JetBrains IDE" : !jetbrains.pluginInstalled ? "未安装插件" : jetbrains.running ? "运行中" : "已接入"}，当前账号：{jetbrainsCurrentName}
                 </span>
               </span>
             )}
 {enabledTools.codebuddyCli && (
-              <span className="group relative inline-flex cursor-default">
+              <span className="group relative inline-flex cursor-default" role="img" aria-label={`CodeBuddy CLI：${codebuddyCli?.migrationRequired ? "需升级" : codebuddyCli?.configured ? "已接入" : "未接入"}，当前账号：${codebuddyCurrentName}`}>
                 <span
                   className={
                     codebuddyCli?.configured
@@ -912,7 +921,7 @@ export default function AccountsPage() {
                   <CodeBuddyMark size={28} />
                 </span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5 group-hover:block">
-                  CodeBuddy CLI：{codebuddyCli?.migrationRequired ? "需升级" : codebuddyCli?.configured ? "已接入" : "未接入"} · 当前账号：{codebuddyCurrentName}
+                  CodeBuddy CLI：{codebuddyCli?.migrationRequired ? "需升级" : codebuddyCli?.configured ? "已接入" : "未接入"}，当前账号：{codebuddyCurrentName}
                 </span>
               </span>
             )}
@@ -921,11 +930,8 @@ export default function AccountsPage() {
         </div>
       </header>
 
-      <div className="relative mb-6 overflow-visible rounded-2xl border border-border bg-muted/30 px-5 py-5 shadow-[0_6px_20px_rgba(15,23,42,.025)]">
-        <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
-          <div className="absolute -right-12 -top-20 size-44 rounded-full border-[28px] border-slate-400/[0.035]" />
-        </div>
-        <div className="relative flex flex-wrap items-center gap-x-5 gap-y-4">
+      <div className="mb-6 rounded-2xl border border-border bg-muted/30 px-5 py-5">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-4">
           <div className="min-w-[190px] flex-1">
             <h2 className="text-sm font-semibold text-foreground">添加与迁移账号</h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
@@ -963,7 +969,14 @@ export default function AccountsPage() {
       {error && (
         <Alert variant="destructive" className="mb-4">
           <AlertTitle>加载失败</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error}
+            {api.isDesktop() && error.includes("账号库") && <Button variant="outline" size="sm" className="mt-2" onClick={async () => {
+              const { confirm } = await import("@tauri-apps/plugin-dialog");
+              if (!await confirm("恢复上一份有效账号备份？损坏文件会另存保留，最近一次修改可能不在备份中。", { title: "恢复账号库", kind: "warning" })) return;
+              try { const { invoke } = await import("@tauri-apps/api/core"); await invoke("restore_accounts_backup"); window.location.reload(); }
+              catch (e) { toast.error("恢复失败", { description: api.asError(e) }); }
+            }}>恢复上一份有效备份</Button>}
+          </AlertDescription>
         </Alert>
       )}
 
@@ -1005,7 +1018,7 @@ export default function AccountsPage() {
                   onClick={() => void onInstallCodebuddyCli()}
                   disabled={installingCodebuddyCli}
                 >
-                  {installingCodebuddyCli && <Loader2 className="animate-spin" />}
+                  {installingCodebuddyCli && <Loader2 className="animate-spin motion-reduce:animate-none" />}
                   {codebuddyUsesSettingsEnv
                     ? codebuddyCli.configured ? "更新 CLI 认证" : "接入 CLI"
                     : codebuddyCli.configured || codebuddyCli.migrationRequired ? "升级 CLI helper" : "接入 CLI"}
@@ -1055,7 +1068,7 @@ export default function AccountsPage() {
                         onClick={() => void onRefreshCredits()}
                         aria-label={refreshCreditsLabel}
                       >
-                        <RefreshCw className={refreshingCredits || checkinAllRunning ? "animate-spin" : undefined} />
+                        <RefreshCw className={refreshingCredits || checkinAllRunning ? "animate-spin motion-reduce:animate-none" : undefined} />
                       </Button>
                     </DemoAction>
                   </span>
@@ -1067,7 +1080,7 @@ export default function AccountsPage() {
         </div>
         {loading && visibleAccounts.length === 0 ? (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
-            <Loader2 className="animate-spin" />
+            <Loader2 className="animate-spin motion-reduce:animate-none" />
             加载账号…
           </div>
         ) : visibleAccounts.length === 0 ? (
@@ -1097,6 +1110,7 @@ export default function AccountsPage() {
                 onSwitch={setSwitchAccount}
                 onShowInfo={setInfoTarget}
                 onCheckin={checkinAvailable ? onCheckin : undefined}
+                checkinBusy={checkinRunningIds.has(a.id)}
                 onRefresh={onRefresh}
                 todayCheckedIn={checkinMap[a.id]}
                 autoCheckinAllowed={checkinAvailable && autoCheckinSettled ? !excludedCheckinIds.has(a.id) : undefined}
