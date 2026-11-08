@@ -1,7 +1,10 @@
 name: macOS ARM64 checks
 
+# Source-snapshot validation only. This repository is a point-in-time export,
+# not the development mainline; release builds live in the private mainline repo.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -16,6 +19,7 @@ jobs:
   checks:
     name: TypeScript, Rust, and frontend tests (macOS ARM64)
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4

@@ -10,6 +10,10 @@ This is the initial public source snapshot, based on the Workbuddy-Switch2 0.1.5
 
 This repository is a **point-in-time source snapshot**, not the development mainline. The branches and tags inherited from the fork are not a release history for this project. Active development and the tagged preview releases (0.1.2 - 0.1.5) live in the separate private `Workbuddy-Switch2` repository. Please treat the code here as an export rather than a branch to sync against.
 
+### Continuous integration
+
+`macOS ARM64 checks` is the only pipeline that validates this snapshot: frontend tests and build, Rust formatting, tests and Clippy, on `main` and on pull requests. Pushes to other branches or tags do not trigger it. The inherited preview-build and demo workflows require pinned runtime binaries that this snapshot does not contain; they are kept for reference and are not a release channel here.
+
 ## Install and use
 
 There is no public installer or downloadable app archive yet. To try the app, build it from this source using the instructions below. Each architecture's app bundles its matching proxy engine and WorkBuddy provider plugin. The app uses bundle identifier `com.wbcli.switch.proxyapi` and data directory `~/.wbcli-switch-proxyapi/`; do not delete that directory or change `WB_SWITCH_HOME` unless you intend to use a separate store.

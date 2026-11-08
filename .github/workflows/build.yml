@@ -1,3 +1,5 @@
+# Inherited from the mainline source. This snapshot does not ship the pinned
+# runtime binaries, so this workflow is kept for reference, not as a release path.
 name: macOS preview builds
 
 on:
@@ -27,6 +29,7 @@ jobs:
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     env:
       WB_RUNTIME_ARCH: ${{ matrix.architecture }}
     steps:

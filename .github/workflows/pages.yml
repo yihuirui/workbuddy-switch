@@ -1,3 +1,4 @@
+# Reference-only demo build inherited from the mainline source.
 name: build read-only demo artifact
 
 on:
@@ -10,6 +11,7 @@ jobs:
   demo:
     name: Build demo without publishing a site
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@v4

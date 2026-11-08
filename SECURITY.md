@@ -1,7 +1,7 @@
 # Security policy
 
-Workbuddy-Switch2 0.1.2 is a preview release. It has not been independently audited or Apple-notarized.
+This repository is a **read-only source snapshot** of Workbuddy-Switch2 0.1.5 (preview), not the development mainline, and it does not publish builds. The preview releases are unsigned, not Apple-notarized, and the code has not been independently audited.
 
-Please report suspected vulnerabilities through GitHub's private vulnerability reporting for this repository when it is enabled. Do not include account exports, access tokens, API keys, cookies, or unredacted logs in a public issue.
+For actively maintained code and release assets, use the private `Workbuddy-Switch2` repository. Issues are disabled here: report suspected vulnerabilities through GitHub's private vulnerability reporting rather than a public issue, and never include account exports, access tokens, API keys, cookies, or unredacted logs.
 
-Security reports should describe the affected release, macOS version and ARM64 device, the steps needed to reproduce the issue, and the impact. Use an empty test account store whenever possible.
+A useful report states the affected release, macOS version and architecture (Apple silicon or Intel), reproduction steps, and impact. Use an empty test account store whenever possible.
