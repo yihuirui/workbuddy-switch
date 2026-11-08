@@ -14,6 +14,19 @@ This repository is a **point-in-time source snapshot**, not the development main
 
 `macOS ARM64 checks` is the only pipeline that validates this snapshot: frontend tests and build, Rust formatting, tests and Clippy, on `main` and on pull requests. Pushes to other branches or tags do not trigger it. The inherited preview-build and demo workflows require pinned runtime binaries that this snapshot does not contain; they are kept for reference and are not a release channel here.
 
+Because this repository is a fork, do not assume a push created a run. Check after every push:
+
+```sh
+gh run list --repo yihuirui/workbuddy-switch --limit 5
+```
+
+If no run was created, dispatch the checks explicitly and then watch the result:
+
+```sh
+gh workflow run test.yml --repo yihuirui/workbuddy-switch --ref main
+gh run list --repo yihuirui/workbuddy-switch --limit 5
+```
+
 ## Install and use
 
 There is no public installer or downloadable app archive yet. To try the app, build it from this source using the instructions below. Each architecture's app bundles its matching proxy engine and WorkBuddy provider plugin. The app uses bundle identifier `com.wbcli.switch.proxyapi` and data directory `~/.wbcli-switch-proxyapi/`; do not delete that directory or change `WB_SWITCH_HOME` unless you intend to use a separate store.
