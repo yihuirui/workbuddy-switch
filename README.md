@@ -1,10 +1,14 @@
-# Workbuddy-Switch2
+# workbuddy-switch
 
-Workbuddy-Switch2 is a desktop app for managing WorkBuddy and CodeBuddy accounts and a local model API proxy.
+Public source snapshot of **Workbuddy-Switch2 0.1.5**, a desktop app for managing WorkBuddy and CodeBuddy accounts and a local model API proxy.
 
 ## Public source status
 
 This is the initial public source snapshot, based on the Workbuddy-Switch2 0.1.5 code. No prebuilt application binaries are published for this public fork yet. The build instructions below target macOS 15.0 or newer on Apple silicon (ARM64) and Intel (x86_64); Windows and Linux packages are not provided by this preview. The source snapshot has not been validated with real account sign-in, real model inference, streaming requests, quota use, or check-in. Builds are not Developer ID signed or Apple-notarized.
+
+### Repository status
+
+This repository is a **point-in-time source snapshot**, not the development mainline. The branches and tags inherited from the fork are not a release history for this project. Active development and the tagged preview releases (0.1.2 - 0.1.5) live in the separate private `Workbuddy-Switch2` repository. Please treat the code here as an export rather than a branch to sync against.
 
 ## Install and use
 
